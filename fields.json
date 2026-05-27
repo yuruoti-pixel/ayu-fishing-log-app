@@ -5,7 +5,8 @@
   { "id": "point", "label": "ポイント名", "type": "combo", "optionKey": "point", "section": "common", "visible": false, "order": 900, "required": false, "deprecated": true },
   { "id": "weather", "label": "天気", "type": "select", "optionKey": "weather", "section": "common", "visible": true, "order": 40, "required": false },
   { "id": "airTemp", "label": "気温", "type": "number", "unit": "℃", "optionKey": "", "section": "common", "visible": true, "order": 50, "required": false },
-  { "id": "commonMemo", "label": "共通メモ", "type": "textarea", "optionKey": "", "section": "common", "visible": true, "order": 60, "required": false },
+  { "id": "photos", "sourceId": "photoIds", "label": "写真", "type": "photos", "optionKey": "", "section": "common", "visible": true, "order": 60, "required": false },
+  { "id": "commonMemo", "label": "共通メモ", "type": "textarea", "optionKey": "", "section": "common", "visible": true, "order": 70, "required": false },
 
   { "id": "morning_startTime", "sourceId": "startTime", "label": "開始時間", "type": "select", "optionKey": "morningStartTime", "section": "morning", "visible": true, "order": 10, "required": false },
   { "id": "morning_point", "sourceId": "point", "label": "ポイント名", "type": "combo", "optionKey": "point", "section": "morning", "visible": true, "order": 20, "required": false },

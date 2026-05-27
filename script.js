@@ -1,8 +1,10 @@
 const DB_NAME = "ayuFishingLogDb";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_STATE = "state";
+const STORE_PHOTOS = "photos";
 const STATE_KEY = "app";
 const LEGACY_STORAGE_KEY = "ayuFishingLog.v1";
+const MAX_RECORD_PHOTOS = 5;
 
 const sections = {
   common: { label: "共通情報", prefix: "" },
@@ -18,7 +20,8 @@ const typeLabels = {
   select: "単一選択",
   multiselect: "複数選択",
   checkbox: "チェック",
-  combo: "候補＋直接入力"
+  combo: "候補＋直接入力",
+  photos: "写真"
 };
 
 const settingPages = {
@@ -98,9 +101,37 @@ function openDatabase() {
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains(STORE_STATE)) database.createObjectStore(STORE_STATE);
+      if (!database.objectStoreNames.contains(STORE_PHOTOS)) database.createObjectStore(STORE_PHOTOS, { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+  });
+}
+
+function writePhoto(photo) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_PHOTOS, "readwrite");
+    tx.objectStore(STORE_PHOTOS).put(photo);
+    tx.oncomplete = () => resolve(photo);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function readPhoto(id) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_PHOTOS, "readonly");
+    const request = tx.objectStore(STORE_PHOTOS).get(id);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function deletePhotoBlob(id) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_PHOTOS, "readwrite");
+    tx.objectStore(STORE_PHOTOS).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
 }
 
@@ -216,6 +247,19 @@ function applySchemaRules(targetState) {
     memo: 140
   };
   targetState.fields.forEach((field) => {
+    if (field.id === "photos") {
+      if (field.label !== "写真" || field.type !== "photos" || field.section !== "common" || field.order !== 60) changed = true;
+      field.label = "写真";
+      field.type = "photos";
+      field.section = "common";
+      field.sourceId = "photoIds";
+      field.order = 60;
+      field.visible = true;
+    }
+    if (field.id === "commonMemo" && Number(field.order || 0) < 70) {
+      field.order = 70;
+      changed = true;
+    }
     if (field.id === "river" && field.label !== "河川") {
       field.label = "河川";
       changed = true;
@@ -273,6 +317,7 @@ function normalizeRecord(record) {
     const morning = { ...(record.morning || {}) };
     const afternoon = { ...(record.afternoon || {}) };
     if (common.point && !morning.point) morning.point = common.point;
+    common.photoIds = Array.isArray(common.photoIds) ? common.photoIds : [];
     return {
       id: record.id || crypto.randomUUID(),
       createdAt: record.createdAt || new Date().toISOString(),
@@ -294,6 +339,7 @@ function normalizeRecord(record) {
       point: record.point || "",
       weather: record.weather || "",
       airTemp: record.airTemp || "",
+      photoIds: [],
       commonMemo: record.memo || ""
     },
     morning: {
@@ -422,7 +468,7 @@ function buildForm(form, record, mode) {
 
 function createFieldControl(field, record, mode) {
   const wrapper = document.createElement("div");
-  wrapper.className = `form-field ${field.type === "textarea" ? "full" : ""}`;
+  wrapper.className = `form-field ${field.type === "textarea" || field.type === "photos" ? "full" : ""}`;
   const inputName = `${field.section}.${field.sourceId || field.id}`;
   const label = document.createElement("label");
   label.htmlFor = `${mode}-${field.id}`;
@@ -431,7 +477,17 @@ function createFieldControl(field, record, mode) {
 
   let input;
   const value = recordSectionValue(record, field);
-  if (field.type === "select") {
+  if (field.type === "photos") {
+    input = document.createElement("input");
+    input.type = "hidden";
+    input.id = `${mode}-${field.id}`;
+    input.name = inputName;
+    input.dataset.fieldId = field.id;
+    input.value = JSON.stringify(Array.isArray(value) ? value : []);
+    wrapper.appendChild(input);
+    wrapper.appendChild(createPhotoPicker(field, value, mode));
+    return wrapper;
+  } else if (field.type === "select") {
     input = document.createElement("select");
     input.appendChild(new Option("選択してください", ""));
     (state.options[field.optionKey] || []).forEach((option) => input.appendChild(new Option(option, option)));
@@ -495,6 +551,120 @@ function createCandidateList(field, value = "") {
   return list;
 }
 
+function createPhotoPicker(field, value = [], mode) {
+  const ids = Array.isArray(value) ? value : [];
+  const box = document.createElement("div");
+  box.className = "photo-field";
+  box.dataset.photoField = field.id;
+  box.innerHTML = `
+    <p class="photo-note">写真はアプリ内に圧縮コピーとして保存されます。スマホ容量を使用します。大事な写真は通常の写真アプリやバックアップにも残してください。</p>
+    <div class="photo-thumbs" data-photo-thumbs="${field.id}">${ids.length ? "" : '<span class="photo-empty">写真はまだありません</span>'}</div>
+    <div class="photo-actions">
+      <button class="secondary-button" type="button" data-photo-add="${field.id}">写真を追加</button>
+      <input class="photo-input" type="file" accept="image/*" multiple data-photo-input="${field.id}">
+    </div>
+  `;
+  renderPhotoThumbs(box, ids);
+  return box;
+}
+
+async function renderPhotoThumbs(container, ids) {
+  const thumbs = container.querySelector(".photo-thumbs");
+  if (!thumbs) return;
+  thumbs.innerHTML = ids.length ? "" : '<span class="photo-empty">写真はまだありません</span>';
+  for (const id of ids) {
+    const photo = await readPhoto(id);
+    if (!photo?.blob) continue;
+    const url = URL.createObjectURL(photo.blob);
+    const item = document.createElement("div");
+    item.className = "photo-thumb";
+    item.innerHTML = `
+      <button type="button" data-photo-view="${id}" aria-label="写真を拡大"><img src="${url}" alt="釣行写真"></button>
+      <button class="photo-delete" type="button" data-photo-delete="${id}" aria-label="写真を削除">×</button>
+    `;
+    thumbs.appendChild(item);
+  }
+}
+
+function photoIdsFromInput(form, fieldId = "photos") {
+  const input = form.querySelector(`[data-field-id="${fieldId}"]`);
+  if (!input) return [];
+  try { return JSON.parse(input.value || "[]"); } catch { return []; }
+}
+
+function setPhotoIdsToInput(form, ids, fieldId = "photos") {
+  const input = form.querySelector(`[data-field-id="${fieldId}"]`);
+  if (input) input.value = JSON.stringify(ids);
+}
+
+async function compressImage(file) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, 1280 / Math.max(bitmap.width, bitmap.height));
+  const width = Math.round(bitmap.width * scale);
+  const height = Math.round(bitmap.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close?.();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.76));
+  return { blob, width, height };
+}
+
+async function addPhotosToForm(form, files) {
+  const ids = photoIdsFromInput(form);
+  if (ids.length >= MAX_RECORD_PHOTOS) {
+    showToast("写真は最大5枚までです");
+    return;
+  }
+  const slots = MAX_RECORD_PHOTOS - ids.length;
+  const selected = Array.from(files).slice(0, slots);
+  if (files.length > slots) showToast("写真は最大5枚までです");
+  for (const file of selected) {
+    if (!file.type.startsWith("image/")) continue;
+    const compressed = await compressImage(file);
+    const id = crypto.randomUUID();
+    await writePhoto({
+      id,
+      blob: compressed.blob,
+      type: "image/jpeg",
+      size: compressed.blob.size,
+      width: compressed.width,
+      height: compressed.height,
+      createdAt: new Date().toISOString(),
+      originalName: file.name || ""
+    });
+    ids.push(id);
+  }
+  setPhotoIdsToInput(form, ids);
+  buildForm(form, collectForm(form, form === editForm ? getEditingRecord() || createEmptyRecord() : createEmptyRecord()), form === editForm ? "edit" : "add");
+}
+
+async function deletePhotoFromForm(form, id) {
+  if (!confirm("この写真を記録から削除します。実行しますか？")) return;
+  const ids = photoIdsFromInput(form).filter((photoId) => photoId !== id);
+  setPhotoIdsToInput(form, ids);
+  const inOtherRecord = state.records.some((record) => record.id !== editingId && (record.common?.photoIds || []).includes(id));
+  if (!inOtherRecord) await deletePhotoBlob(id);
+  buildForm(form, collectForm(form, form === editForm ? getEditingRecord() || createEmptyRecord() : createEmptyRecord()), form === editForm ? "edit" : "add");
+}
+
+async function openPhotoViewer(id) {
+  const photo = await readPhoto(id);
+  if (!photo?.blob) return;
+  const url = URL.createObjectURL(photo.blob);
+  actionSheet.innerHTML = `
+    <div class="action-sheet-backdrop" data-close-actions="true"></div>
+    <div class="photo-viewer-panel">
+      <button class="small-button" type="button" data-close-actions="true">閉じる</button>
+      <img src="${url}" alt="釣行写真">
+    </div>
+  `;
+  actionSheet.classList.add("show");
+  actionSheet.setAttribute("aria-hidden", "false");
+}
+
 function filteredOptions(optionKey, query) {
   const needle = String(query || "").trim().toLowerCase();
   return [...new Set(state.options[optionKey] || [])].filter((option) => !needle || option.toLowerCase().includes(needle));
@@ -507,7 +677,9 @@ function collectForm(form, existing = {}) {
     const input = form.elements[`${field.section}.${field.sourceId || field.id}`];
     if (!input) return;
     let value;
-    if (field.type === "multiselect") value = Array.from(input.selectedOptions).map((option) => option.value);
+    if (field.type === "photos") {
+      try { value = JSON.parse(input.value || "[]"); } catch { value = []; }
+    } else if (field.type === "multiselect") value = Array.from(input.selectedOptions).map((option) => option.value);
     else if (field.type === "checkbox") value = input.checked;
     else value = input.value.trim();
     setRecordSectionValue(record, field, value);
@@ -1021,7 +1193,12 @@ function openEdit(id) {
 
 async function deleteRecord(id) {
   if (!confirm("この記録を削除しますか？")) return;
+  const deleted = state.records.find((record) => record.id === id);
   state.records = state.records.filter((record) => record.id !== id);
+  for (const photoId of deleted?.common?.photoIds || []) {
+    const stillUsed = state.records.some((record) => (record.common?.photoIds || []).includes(photoId));
+    if (!stillUsed) await deletePhotoBlob(photoId);
+  }
   await saveState();
   renderList();
   showToast("記録を削除しました");
@@ -1070,6 +1247,7 @@ function appendShareSection(lines, section, record, includeFishingCoop = false) 
     : sectionFields(section);
   fields.forEach((field) => {
     if (section === "common" && (field.sourceId || field.id) === "commonMemo") return;
+    if (field.type === "photos") return;
     if (field.id === "fishingCoop" && !record.common?.fishingCoop && !field.visible) return;
     lines.push(`${shareLabel(field)}：${formatValue(recordSectionValue(record, field))}`);
   });
@@ -1165,7 +1343,7 @@ function exportCsv() {
   const headers = fields.map((field) => `${sections[field.section].prefix}${field.label}`).concat("合計釣果数");
   const rows = [...state.records]
     .sort((a, b) => (b.common.date || "").localeCompare(a.common.date || ""))
-    .map((record) => fields.map((field) => formatValue(recordSectionValue(record, field))).concat(totalCatch(record)));
+    .map((record) => fields.map((field) => field.type === "photos" ? (record.common?.photoIds || []).length : formatValue(recordSectionValue(record, field))).concat(totalCatch(record)));
   const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
   exportFile(`ayu-log-${today()}.csv`, `\ufeff${csv}`, "text/csv;charset=utf-8");
 }
@@ -1175,7 +1353,7 @@ function buildCsvBlob() {
   const headers = fields.map((field) => `${sections[field.section].prefix}${field.label}`).concat("合計釣果数");
   const rows = [...state.records]
     .sort((a, b) => (b.common.date || "").localeCompare(a.common.date || ""))
-    .map((record) => fields.map((field) => formatValue(recordSectionValue(record, field))).concat(totalCatch(record)));
+    .map((record) => fields.map((field) => field.type === "photos" ? (record.common?.photoIds || []).length : formatValue(recordSectionValue(record, field))).concat(totalCatch(record)));
   const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
   return new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
 }
@@ -1379,6 +1557,18 @@ function bindFormBehavior(form, mode) {
       return;
     }
     if (event.target.dataset.copyMorning) copyMorningToAfternoon(form, mode);
+    if (event.target.dataset.photoAdd) {
+      form.querySelector(`[data-photo-input="${event.target.dataset.photoAdd}"]`)?.click();
+      return;
+    }
+    if (event.target.dataset.photoDelete) {
+      deletePhotoFromForm(form, event.target.dataset.photoDelete);
+      return;
+    }
+    if (event.target.dataset.photoView) {
+      openPhotoViewer(event.target.dataset.photoView);
+      return;
+    }
     if (event.target.dataset.candidateValue !== undefined) {
       const input = event.target.closest(".form-field").querySelector("input[data-combo-input]");
       input.value = event.target.dataset.candidateValue;
@@ -1391,6 +1581,12 @@ function bindFormBehavior(form, mode) {
     const record = collectForm(form, mode === "edit" ? getEditingRecord() || createEmptyRecord() : createEmptyRecord());
     const total = form.querySelector(".total-strip");
     if (total) total.textContent = `合計釣果：${totalCatch(record)}匹`;
+  });
+  form.addEventListener("change", (event) => {
+    if (event.target.dataset.photoInput) {
+      addPhotosToForm(form, event.target.files);
+      event.target.value = "";
+    }
   });
 }
 
