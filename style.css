@@ -662,6 +662,17 @@ button:focus-visible {
   line-height: 1;
 }
 
+.calendar-cell.selected {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #fff;
+  font-weight: 900;
+}
+
+.calendar-cell.selected small {
+  color: #fff;
+}
+
 .calendar-cell.muted {
   background: transparent;
   border-color: transparent;

@@ -51,6 +51,7 @@ let activeTab = { add: "common", edit: "common" };
 let settingPage = "top";
 let expandedFieldId = "";
 let calendarCursor = new Date();
+let selectedCalendarDate = today();
 let searchDetailsOpen = false;
 let backupPage = "top";
 
@@ -577,7 +578,7 @@ function renderCalendar() {
   for (let day = 1; day <= lastDay; day++) {
     const date = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     cells.push(`
-      <button class="calendar-cell" type="button" data-calendar-date="${date}">
+      <button class="calendar-cell ${date === selectedCalendarDate ? "selected" : ""}" type="button" data-calendar-date="${date}">
         <span>${day}</span>
         ${daysWithRecords.has(date) ? '<small>●</small>' : ""}
       </button>
@@ -597,7 +598,7 @@ function renderCalendar() {
     <div class="calendar-weekdays">${["日", "月", "火", "水", "木", "金", "土"].map((d) => `<span>${d}</span>`).join("")}</div>
     <div class="calendar-grid">${cells.join("")}</div>
   `;
-  renderDayRecords(today());
+  renderDayRecords(selectedCalendarDate);
 }
 
 function renderDayRecords(date) {
@@ -1483,7 +1484,10 @@ calendarPanel.addEventListener("click", (event) => {
     return;
   }
   const date = event.target.closest("[data-calendar-date]")?.dataset.calendarDate;
-  if (date) renderDayRecords(date);
+  if (date) {
+    selectedCalendarDate = date;
+    renderCalendar();
+  }
 });
 
 calendarPanel.addEventListener("change", (event) => {
