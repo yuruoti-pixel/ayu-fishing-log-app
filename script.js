@@ -1000,15 +1000,25 @@ function renderBackup() {
     </div>
     <button id="chooseJsonRestoreButton" class="secondary-button" type="button">JSONから復元</button>
     <button id="choosePhotoZipRestoreButton" class="secondary-button" type="button">写真付きバックアップZIPから復元</button>
-    <input id="importJsonInput" class="restore-file-input" type="file" accept=".json,application/json,text/json,text/plain,*/*">
-    <input id="importPhotoZipInput" class="restore-file-input" type="file" accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream,*/*">
   `;
 }
 
-function openRestoreFileInput(inputId) {
-  const input = document.getElementById(inputId);
-  if (!input) return;
-  input.value = "";
+function openRestoreFileInput(kind) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.className = "restore-file-input";
+  input.accept = kind === "zip"
+    ? ".zip,application/zip,application/x-zip-compressed,application/octet-stream,*/*"
+    : ".json,application/json,text/json,text/plain,*/*";
+  input.addEventListener("change", () => {
+    const [file] = input.files || [];
+    if (file) {
+      if (kind === "zip") importPhotoZip(file);
+      else confirmAndImportJson(file);
+    }
+    input.remove();
+  }, { once: true });
+  document.body.appendChild(input);
   input.click();
 }
 
@@ -1931,21 +1941,11 @@ backupContent.addEventListener("click", (event) => {
   if (button.id === "shareJsonButton") shareBlob(buildJsonBlob(), `ayu-log-backup-${today()}.json`, "鮎釣りJSONバックアップ");
   if (button.id === "exportPhotoZipButton") savePhotoZip();
   if (button.id === "sharePhotoZipButton") sharePhotoZip();
-  if (button.id === "chooseJsonRestoreButton") openRestoreFileInput("importJsonInput");
-  if (button.id === "choosePhotoZipRestoreButton") openRestoreFileInput("importPhotoZipInput");
+  if (button.id === "chooseJsonRestoreButton") openRestoreFileInput("json");
+  if (button.id === "choosePhotoZipRestoreButton") openRestoreFileInput("zip");
 });
 
 backupContent.addEventListener("change", (event) => {
-  if (event.target.id === "importJsonInput") {
-    const [file] = event.target.files;
-    if (file) confirmAndImportJson(file);
-    event.target.value = "";
-  }
-  if (event.target.id === "importPhotoZipInput") {
-    const [file] = event.target.files;
-    if (file) importPhotoZip(file);
-    event.target.value = "";
-  }
 });
 
 addForm.addEventListener("submit", async (event) => {
