@@ -995,19 +995,35 @@ function renderBackup() {
     <div class="backup-warning danger-warning">
       <strong>復元前の注意</strong>
       <p>JSONバックアップから復元すると、現在の記録や設定がバックアップ内容に置き換わる場合があります。復元前に必要なデータを保存してください。</p>
+      <p>LINEなどで受け取ったバックアップファイルは、先にスマホの「ダウンロード」や「Files」アプリに保存してから選んでください。表示されない場合は「すべてのファイル」や「ダウンロード」フォルダから選んでください。</p>
     </div>
-    <label class="file-import">
-      JSONから復元
-      <input id="importJsonInput" type="file" accept="application/json,.json">
-    </label>
-    <label class="file-import">
-      写真付きバックアップZIPから復元
-      <input id="importPhotoZipInput" type="file" accept="application/zip,.zip">
-    </label>
+    <button id="chooseJsonRestoreButton" class="secondary-button" type="button">JSONから復元</button>
+    <button id="choosePhotoZipRestoreButton" class="secondary-button" type="button">写真付きバックアップZIPから復元</button>
+    <input id="importJsonInput" class="restore-file-input" type="file" accept=".json,application/json,text/json,text/plain,*/*">
+    <input id="importPhotoZipInput" class="restore-file-input" type="file" accept=".zip,application/zip,application/x-zip-compressed,application/octet-stream,*/*">
   `;
 }
 
+function openRestoreFileInput(inputId) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  input.value = "";
+  input.click();
+}
+
+function isJsonFile(file) {
+  return /\.json$/i.test(file.name) || ["application/json", "text/json", "text/plain"].includes(file.type);
+}
+
+function isZipFile(file) {
+  return /\.zip$/i.test(file.name) || ["application/zip", "application/x-zip-compressed", "application/octet-stream"].includes(file.type);
+}
+
 function confirmAndImportJson(file) {
+  if (!isJsonFile(file)) {
+    showToast("このファイル形式は復元に対応していません。JSONファイルを選択してください。");
+    return;
+  }
   if (!confirm("JSONバックアップから復元します。現在のデータが置き換わる可能性があります。実行しますか？")) return;
   importJson(file);
 }
@@ -1022,6 +1038,10 @@ async function clearPhotoStore() {
 }
 
 async function importPhotoZip(file) {
+  if (!isZipFile(file)) {
+    showToast("このファイル形式は復元に対応していません。写真付きバックアップZIPを選択してください。");
+    return;
+  }
   if (!confirm("写真付きバックアップZIPから復元します。現在の記録・設定・写真データがバックアップ内容に置き換わる可能性があります。実行しますか？")) return;
   try {
     showToast("写真付きバックアップを復元中です");
@@ -1905,6 +1925,8 @@ backupContent.addEventListener("click", (event) => {
   if (button.id === "shareJsonButton") shareBlob(buildJsonBlob(), `ayu-log-backup-${today()}.json`, "鮎釣りJSONバックアップ");
   if (button.id === "exportPhotoZipButton") savePhotoZip();
   if (button.id === "sharePhotoZipButton") sharePhotoZip();
+  if (button.id === "chooseJsonRestoreButton") openRestoreFileInput("importJsonInput");
+  if (button.id === "choosePhotoZipRestoreButton") openRestoreFileInput("importPhotoZipInput");
 });
 
 backupContent.addEventListener("change", (event) => {
