@@ -737,8 +737,15 @@ button:focus-visible {
   display: grid;
   gap: 6px;
   grid-template-columns: repeat(7, 1fr);
-  grid-template-rows: repeat(6, minmax(42px, auto));
   align-items: stretch;
+}
+
+.calendar-weekdays {
+  margin-bottom: 8px;
+}
+
+.calendar-grid {
+  grid-auto-rows: minmax(42px, auto);
   margin-bottom: 8px;
 }
 

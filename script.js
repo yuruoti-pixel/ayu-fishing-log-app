@@ -1003,10 +1003,31 @@ function renderBackup() {
   `;
 }
 
-function openRestoreFileInput(inputId) {
-  const input = document.getElementById(inputId);
-  if (!input) return;
-  input.value = "";
+function openJsonRestorePicker() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json,application/json,text/json,text/plain";
+  input.removeAttribute("capture");
+  input.addEventListener("change", () => {
+    const [file] = input.files || [];
+    if (file) confirmAndImportJson(file);
+    input.value = "";
+    input.remove();
+  }, { once: true });
+  input.click();
+}
+
+function openPhotoZipRestorePicker() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".zip,application/zip,application/x-zip-compressed,application/octet-stream";
+  input.removeAttribute("capture");
+  input.addEventListener("change", () => {
+    const [file] = input.files || [];
+    if (file) importPhotoZip(file);
+    input.value = "";
+    input.remove();
+  }, { once: true });
   input.click();
 }
 
@@ -1929,20 +1950,8 @@ backupContent.addEventListener("click", (event) => {
   if (button.id === "shareJsonButton") shareBlob(buildJsonBlob(), `ayu-log-backup-${today()}.json`, "鮎釣りJSONバックアップ");
   if (button.id === "exportPhotoZipButton") savePhotoZip();
   if (button.id === "sharePhotoZipButton") sharePhotoZip();
-  if (button.id === "chooseJsonRestoreButton") openRestoreFileInput("jsonRestoreInput");
-  if (button.id === "choosePhotoZipRestoreButton") openRestoreFileInput("photoZipRestoreInput");
-});
-
-document.getElementById("jsonRestoreInput").addEventListener("change", (event) => {
-  const [file] = event.target.files;
-  if (file) confirmAndImportJson(file);
-  event.target.value = "";
-});
-
-document.getElementById("photoZipRestoreInput").addEventListener("change", (event) => {
-  const [file] = event.target.files;
-  if (file) importPhotoZip(file);
-  event.target.value = "";
+  if (button.id === "chooseJsonRestoreButton") openJsonRestorePicker();
+  if (button.id === "choosePhotoZipRestoreButton") openPhotoZipRestorePicker();
 });
 
 addForm.addEventListener("submit", async (event) => {
