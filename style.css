@@ -230,6 +230,10 @@ h3 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.photo-actions .secondary-button {
+  white-space: nowrap;
+}
+
 .photo-note {
   margin: 0;
   color: var(--muted);

@@ -560,8 +560,8 @@ function createPhotoPicker(field, value = [], mode) {
     <p class="photo-note">写真はアプリ内に圧縮コピーとして保存されます。スマホ容量を使用します。大事な写真は通常の写真アプリやバックアップにも残してください。</p>
     <div class="photo-thumbs" data-photo-thumbs="${field.id}">${ids.length ? "" : '<span class="photo-empty">写真はまだありません</span>'}</div>
     <div class="photo-actions">
-      <button class="secondary-button" type="button" data-photo-select="${field.id}">写真をアップロード</button>
-      <button class="secondary-button" type="button" data-photo-capture="${field.id}">カメラで撮影</button>
+      <button class="secondary-button" type="button" data-photo-select="${field.id}">写真を選ぶ</button>
+      <button class="secondary-button" type="button" data-photo-capture="${field.id}">カメラ撮影</button>
       <input class="photo-input" type="file" accept="image/*" multiple data-photo-input="${field.id}">
       <input class="photo-input" type="file" accept="image/*" capture="environment" data-photo-camera-input="${field.id}">
     </div>
