@@ -560,7 +560,7 @@ function createPhotoPicker(field, value = [], mode) {
     <p class="photo-note">写真はアプリ内に圧縮コピーとして保存されます。スマホ容量を使用します。大事な写真は通常の写真アプリやバックアップにも残してください。</p>
     <div class="photo-thumbs" data-photo-thumbs="${field.id}">${ids.length ? "" : '<span class="photo-empty">写真はまだありません</span>'}</div>
     <div class="photo-actions">
-      <button class="secondary-button" type="button" data-photo-select="${field.id}">写真を選択</button>
+      <button class="secondary-button" type="button" data-photo-select="${field.id}">写真をアップロード</button>
       <button class="secondary-button" type="button" data-photo-capture="${field.id}">カメラで撮影</button>
       <input class="photo-input" type="file" accept="image/*" multiple data-photo-input="${field.id}">
       <input class="photo-input" type="file" accept="image/*" capture="environment" data-photo-camera-input="${field.id}">
@@ -581,8 +581,7 @@ async function renderPhotoThumbs(container, ids) {
     const item = document.createElement("div");
     item.className = "photo-thumb";
     item.innerHTML = `
-      <button type="button" data-photo-view="${id}" aria-label="写真を拡大"><img src="${url}" alt="釣行写真"></button>
-      <button class="photo-delete" type="button" data-photo-delete="${id}" aria-label="写真を削除">×</button>
+      <button type="button" data-photo-view="${id}" data-photo-longpress="${id}" aria-label="写真を拡大"><img src="${url}" alt="釣行写真"></button>
     `;
     thumbs.appendChild(item);
   }
@@ -1551,6 +1550,12 @@ function showToast(message) {
 }
 
 function bindFormBehavior(form, mode) {
+  let photoPressTimer = null;
+  let photoLongPressed = false;
+  const clearPhotoPress = () => {
+    window.clearTimeout(photoPressTimer);
+    photoPressTimer = null;
+  };
   form.addEventListener("click", (event) => {
     const tab = event.target.dataset.formTab;
     if (tab) {
@@ -1582,8 +1587,13 @@ function bindFormBehavior(form, mode) {
       deletePhotoFromForm(form, event.target.dataset.photoDelete);
       return;
     }
-    if (event.target.dataset.photoView) {
-      openPhotoViewer(event.target.dataset.photoView);
+    const photoViewTarget = event.target.closest("[data-photo-view]");
+    if (photoViewTarget) {
+      if (photoLongPressed) {
+        photoLongPressed = false;
+        return;
+      }
+      openPhotoViewer(photoViewTarget.dataset.photoView);
       return;
     }
     if (event.target.dataset.candidateValue !== undefined) {
@@ -1604,6 +1614,22 @@ function bindFormBehavior(form, mode) {
       addPhotosToForm(form, event.target.files);
       event.target.value = "";
     }
+  });
+  form.addEventListener("pointerdown", (event) => {
+    const target = event.target.closest("[data-photo-longpress]");
+    if (!target) return;
+    photoLongPressed = false;
+    clearPhotoPress();
+    photoPressTimer = window.setTimeout(() => {
+      photoLongPressed = true;
+      deletePhotoFromForm(form, target.dataset.photoLongpress);
+    }, 650);
+  });
+  ["pointerup", "pointerleave", "pointercancel"].forEach((type) => {
+    form.addEventListener(type, clearPhotoPress);
+  });
+  form.addEventListener("contextmenu", (event) => {
+    if (event.target.closest("[data-photo-longpress]")) event.preventDefault();
   });
 }
 

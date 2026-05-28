@@ -256,6 +256,9 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #eef7f4;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
 }
 
 .photo-thumb button:first-child {
@@ -271,19 +274,6 @@ h3 {
   height: 100%;
   object-fit: cover;
   display: block;
-}
-
-.photo-delete {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: 999px;
-  background: rgba(149, 39, 25, 0.92);
-  color: #fff;
-  font-weight: 900;
 }
 
 .photo-input {
