@@ -1482,24 +1482,33 @@ async function sharePhotoZip() {
   try {
     const filename = photoZipFilename();
     const blob = await buildPhotoZipBlob();
-    const file = new File([blob], filename, { type: "application/zip" });
-    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ title: "鮎釣り写真付きバックアップ", files: [file] });
-      return;
-    }
-    showToast("この端末ではファイル共有に対応していない可能性があります。ZIPを保存してから共有してください。");
+    await shareFileOrSave(
+      blob,
+      filename,
+      "鮎釣り写真付きバックアップ",
+      "この端末ではZIP共有に対応していない可能性があります。ZIPを保存しました。"
+    );
   } catch {
     showToast("写真付きバックアップの共有に失敗しました");
   }
 }
 
 async function shareBlob(blob, filename, title) {
-  const file = new File([blob], filename, { type: blob.type });
-  if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-    await navigator.share({ title, files: [file] });
-    return;
+  await shareFileOrSave(blob, filename, title, "この端末ではファイル共有に対応していない可能性があります。ファイルを保存しました。");
+}
+
+async function shareFileOrSave(blob, filename, title, fallbackMessage) {
+  const file = new File([blob], filename, { type: blob.type || "application/octet-stream" });
+  try {
+    if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+      await navigator.share({ title, files: [file] });
+      return;
+    }
+  } catch (error) {
+    if (error.name === "AbortError") return;
   }
-  showToast("この端末ではファイル共有に対応していません。保存ボタンを使ってください");
+  saveBlob(filename, blob);
+  showToast(fallbackMessage);
 }
 
 function saveBlob(filename, blob) {
@@ -1882,18 +1891,20 @@ navButtons.forEach((button) => {
 document.getElementById("quickAddButton").addEventListener("click", () => showView("add"));
 
 backupContent.addEventListener("click", (event) => {
-  const nextPage = event.target.closest("[data-backup-page]")?.dataset.backupPage;
+  const button = event.target.closest("button");
+  if (!button) return;
+  const nextPage = button.dataset.backupPage;
   if (nextPage) {
     backupPage = nextPage;
     renderBackup();
     return;
   }
-  if (event.target.id === "exportCsvButton") exportCsv();
-  if (event.target.id === "shareCsvButton") shareBlob(buildCsvBlob(), `ayu-log-${today()}.csv`, "鮎釣りCSV");
-  if (event.target.id === "exportJsonButton") exportJson();
-  if (event.target.id === "shareJsonButton") shareBlob(buildJsonBlob(), `ayu-log-backup-${today()}.json`, "鮎釣りJSONバックアップ");
-  if (event.target.id === "exportPhotoZipButton") savePhotoZip();
-  if (event.target.id === "sharePhotoZipButton") sharePhotoZip();
+  if (button.id === "exportCsvButton") exportCsv();
+  if (button.id === "shareCsvButton") shareBlob(buildCsvBlob(), `ayu-log-${today()}.csv`, "鮎釣りCSV");
+  if (button.id === "exportJsonButton") exportJson();
+  if (button.id === "shareJsonButton") shareBlob(buildJsonBlob(), `ayu-log-backup-${today()}.json`, "鮎釣りJSONバックアップ");
+  if (button.id === "exportPhotoZipButton") savePhotoZip();
+  if (button.id === "sharePhotoZipButton") sharePhotoZip();
 });
 
 backupContent.addEventListener("change", (event) => {

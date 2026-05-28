@@ -701,6 +701,15 @@ button:focus-visible {
   gap: 12px;
 }
 
+.calendar-panel {
+  margin-bottom: 18px;
+  overflow: visible;
+}
+
+.day-record-panel {
+  margin-top: 4px;
+}
+
 .calendar-toolbar {
   align-items: center;
   display: grid;
@@ -719,6 +728,8 @@ button:focus-visible {
   display: grid;
   gap: 6px;
   grid-template-columns: repeat(7, 1fr);
+  align-items: stretch;
+  margin-bottom: 4px;
 }
 
 .calendar-weekdays span {
