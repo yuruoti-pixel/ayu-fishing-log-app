@@ -968,6 +968,8 @@ function renderBackup() {
       <p class="notice">CSVはExcelや一覧確認・集計用です。JSONバックアップはアプリに復元するための完全バックアップです。</p>
       <button id="exportCsvButton" class="primary-button" type="button">CSVを保存</button>
       <button id="exportJsonButton" class="secondary-button" type="button">JSONバックアップを保存</button>
+      <button id="exportPhotoZipButton" class="secondary-button" type="button">写真付きバックアップZIPを保存</button>
+      <p class="notice">写真付きバックアップZIPは写真を含むため、通常のJSONバックアップより容量が大きくなります。長期保管はGoogle Drive、パソコン、NASなどをおすすめします。</p>
     `;
     return;
   }
@@ -980,6 +982,8 @@ function renderBackup() {
       <p class="notice">CSVファイルや復元用JSONバックアップをLINE、Google Drive、メールなどへ送ります。LINE送信は一時共有向きです。長期保管はGoogle Drive、パソコン、NASなどをおすすめします。</p>
       <button id="shareCsvButton" class="primary-button" type="button">CSVを共有</button>
       <button id="shareJsonButton" class="secondary-button" type="button">JSONバックアップを共有</button>
+      <button id="sharePhotoZipButton" class="secondary-button" type="button">写真付きバックアップZIPを共有</button>
+      <p class="notice">写真付きバックアップZIPは写真を含むため、通常のJSONバックアップより容量が大きくなります。</p>
     `;
     return;
   }
@@ -996,12 +1000,62 @@ function renderBackup() {
       JSONから復元
       <input id="importJsonInput" type="file" accept="application/json,.json">
     </label>
+    <label class="file-import">
+      写真付きバックアップZIPから復元
+      <input id="importPhotoZipInput" type="file" accept="application/zip,.zip">
+    </label>
   `;
 }
 
 function confirmAndImportJson(file) {
   if (!confirm("JSONバックアップから復元します。現在のデータが置き換わる可能性があります。実行しますか？")) return;
   importJson(file);
+}
+
+async function clearPhotoStore() {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_PHOTOS, "readwrite");
+    tx.objectStore(STORE_PHOTOS).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function importPhotoZip(file) {
+  if (!confirm("写真付きバックアップZIPから復元します。現在の記録・設定・写真データがバックアップ内容に置き換わる可能性があります。実行しますか？")) return;
+  try {
+    showToast("写真付きバックアップを復元中です");
+    const entries = readZipEntries(await file.arrayBuffer());
+    const backupBytes = entries.get("backup.json");
+    if (!backupBytes) throw new Error("backup.json not found");
+    const backup = JSON.parse(new TextDecoder().decode(backupBytes));
+    if (backup.backupFormat !== "ayu-photo-zip" || !backup.state) throw new Error("invalid backup");
+    const nextState = normalizeState(backup.state);
+    mergeNewTemplateItems(nextState);
+    applySchemaRules(nextState);
+    await clearPhotoStore();
+    for (const item of Object.values(backup.photos?.map || {})) {
+      const bytes = entries.get(item.filename);
+      if (!bytes) continue;
+      await writePhoto({
+        id: item.id,
+        blob: new Blob([bytes], { type: item.type || "image/jpeg" }),
+        type: item.type || "image/jpeg",
+        size: item.size || bytes.length,
+        width: item.width || null,
+        height: item.height || null,
+        createdAt: item.createdAt || new Date().toISOString()
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    state = nextState;
+    await saveState();
+    buildForm(addForm, createEmptyRecord(), "add");
+    showToast("写真付きバックアップを復元しました");
+    showView("list");
+  } catch {
+    showToast("写真付きバックアップZIPを復元できませんでした");
+  }
 }
 
 function toolRanking(records, key) {
@@ -1363,6 +1417,82 @@ function buildJsonBlob() {
   return new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
 }
 
+function usedPhotoIds() {
+  return [...new Set(state.records.flatMap((record) => record.common?.photoIds || []))];
+}
+
+async function buildPhotoZipBlob() {
+  showToast("写真付きバックアップを作成中です");
+  const photoIds = usedPhotoIds();
+  const photoEntries = [];
+  const photoMap = {};
+  let index = 1;
+  for (const id of photoIds) {
+    const photo = await readPhoto(id);
+    if (!photo?.blob) continue;
+    const filename = `photos/photo_${String(index).padStart(3, "0")}.jpg`;
+    photoMap[id] = {
+      id,
+      filename,
+      type: photo.type || "image/jpeg",
+      size: photo.size || photo.blob.size || 0,
+      width: photo.width || null,
+      height: photo.height || null,
+      createdAt: photo.createdAt || ""
+    };
+    photoEntries.push({ name: filename, data: new Uint8Array(await photo.blob.arrayBuffer()) });
+    index += 1;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const backup = {
+    backupFormat: "ayu-photo-zip",
+    backupVersion: 1,
+    createdAt: new Date().toISOString(),
+    state: {
+      schemaVersion: state.schemaVersion,
+      fields: state.fields,
+      options: state.options,
+      records: state.records
+    },
+    photos: {
+      map: photoMap,
+      count: Object.keys(photoMap).length
+    }
+  };
+  const jsonBytes = new TextEncoder().encode(JSON.stringify(backup, null, 2));
+  return createZipBlob([{ name: "backup.json", data: jsonBytes }, ...photoEntries]);
+}
+
+function photoZipFilename() {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 13).replace("T", "-");
+  return `ayu-fishing-log-photo-backup-${stamp}.zip`;
+}
+
+async function savePhotoZip() {
+  try {
+    const blob = await buildPhotoZipBlob();
+    saveBlob(photoZipFilename(), blob);
+    showToast("写真付きバックアップを保存しました");
+  } catch {
+    showToast("写真付きバックアップの作成に失敗しました");
+  }
+}
+
+async function sharePhotoZip() {
+  try {
+    const filename = photoZipFilename();
+    const blob = await buildPhotoZipBlob();
+    const file = new File([blob], filename, { type: "application/zip" });
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ title: "鮎釣り写真付きバックアップ", files: [file] });
+      return;
+    }
+    showToast("この端末ではファイル共有に対応していない可能性があります。ZIPを保存してから共有してください。");
+  } catch {
+    showToast("写真付きバックアップの共有に失敗しました");
+  }
+}
+
 async function shareBlob(blob, filename, title) {
   const file = new File([blob], filename, { type: blob.type });
   if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -1379,6 +1509,109 @@ function saveBlob(filename, blob) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+let crcTable;
+function crc32(bytes) {
+  crcTable ||= Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  let crc = 0xffffffff;
+  for (const byte of bytes) crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function dosDateTime(date = new Date()) {
+  const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const day = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return { time, day };
+}
+
+function writeU16(view, offset, value) {
+  view.setUint16(offset, value, true);
+}
+
+function writeU32(view, offset, value) {
+  view.setUint32(offset, value >>> 0, true);
+}
+
+function createZipBlob(entries) {
+  const encoder = new TextEncoder();
+  const now = dosDateTime();
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  entries.forEach((entry) => {
+    const nameBytes = encoder.encode(entry.name);
+    const data = entry.data instanceof Uint8Array ? entry.data : new Uint8Array(entry.data);
+    const crc = crc32(data);
+    const local = new Uint8Array(30 + nameBytes.length);
+    const localView = new DataView(local.buffer);
+    writeU32(localView, 0, 0x04034b50);
+    writeU16(localView, 4, 20);
+    writeU16(localView, 6, 0x0800);
+    writeU16(localView, 8, 0);
+    writeU16(localView, 10, now.time);
+    writeU16(localView, 12, now.day);
+    writeU32(localView, 14, crc);
+    writeU32(localView, 18, data.length);
+    writeU32(localView, 22, data.length);
+    writeU16(localView, 26, nameBytes.length);
+    local.set(nameBytes, 30);
+    parts.push(local, data);
+
+    const center = new Uint8Array(46 + nameBytes.length);
+    const centerView = new DataView(center.buffer);
+    writeU32(centerView, 0, 0x02014b50);
+    writeU16(centerView, 4, 20);
+    writeU16(centerView, 6, 20);
+    writeU16(centerView, 8, 0x0800);
+    writeU16(centerView, 10, 0);
+    writeU16(centerView, 12, now.time);
+    writeU16(centerView, 14, now.day);
+    writeU32(centerView, 16, crc);
+    writeU32(centerView, 20, data.length);
+    writeU32(centerView, 24, data.length);
+    writeU16(centerView, 28, nameBytes.length);
+    writeU32(centerView, 42, offset);
+    center.set(nameBytes, 46);
+    central.push(center);
+    offset += local.length + data.length;
+  });
+  const centralSize = central.reduce((sum, part) => sum + part.length, 0);
+  const end = new Uint8Array(22);
+  const endView = new DataView(end.buffer);
+  writeU32(endView, 0, 0x06054b50);
+  writeU16(endView, 8, entries.length);
+  writeU16(endView, 10, entries.length);
+  writeU32(endView, 12, centralSize);
+  writeU32(endView, 16, offset);
+  return new Blob([...parts, ...central, end], { type: "application/zip" });
+}
+
+function readZipEntries(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  const decoder = new TextDecoder();
+  const entries = new Map();
+  let offset = 0;
+  while (offset + 30 < bytes.length) {
+    const sig = view.getUint32(offset, true);
+    if (sig !== 0x04034b50) break;
+    const method = view.getUint16(offset + 8, true);
+    const compressedSize = view.getUint32(offset + 18, true);
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const name = decoder.decode(bytes.slice(nameStart, nameStart + nameLength));
+    if (method !== 0) throw new Error("unsupported zip compression");
+    entries.set(name, bytes.slice(dataStart, dataStart + compressedSize));
+    offset = dataStart + compressedSize;
+  }
+  return entries;
 }
 
 function csvCell(value) {
@@ -1659,12 +1892,19 @@ backupContent.addEventListener("click", (event) => {
   if (event.target.id === "shareCsvButton") shareBlob(buildCsvBlob(), `ayu-log-${today()}.csv`, "鮎釣りCSV");
   if (event.target.id === "exportJsonButton") exportJson();
   if (event.target.id === "shareJsonButton") shareBlob(buildJsonBlob(), `ayu-log-backup-${today()}.json`, "鮎釣りJSONバックアップ");
+  if (event.target.id === "exportPhotoZipButton") savePhotoZip();
+  if (event.target.id === "sharePhotoZipButton") sharePhotoZip();
 });
 
 backupContent.addEventListener("change", (event) => {
   if (event.target.id === "importJsonInput") {
     const [file] = event.target.files;
     if (file) confirmAndImportJson(file);
+    event.target.value = "";
+  }
+  if (event.target.id === "importPhotoZipInput") {
+    const [file] = event.target.files;
+    if (file) importPhotoZip(file);
     event.target.value = "";
   }
 });
