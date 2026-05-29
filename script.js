@@ -1526,6 +1526,7 @@ async function sharePhotoZip() {
       blob,
       filename,
       "鮎釣り写真付きバックアップ",
+      "application/zip",
       "この端末では直接共有できないため、ファイルを保存しました。保存後は、スマホのダウンロードまたはFilesアプリからファイルを選んで共有してください。"
     );
   } catch {
@@ -1534,32 +1535,49 @@ async function sharePhotoZip() {
 }
 
 async function shareBlob(blob, filename, title) {
-  await shareFile(blob, filename, title, "この端末では直接共有できないため、ファイルを保存しました。保存後は、スマホのダウンロードまたはFilesアプリからファイルを選んで共有してください。");
+  const type = filename.endsWith(".csv") ? "text/csv" : "application/json";
+  await shareFile(blob, filename, title, type, "この端末では直接共有できないため、ファイルを保存しました。保存後は、スマホのダウンロードまたはFilesアプリからファイルを選んで共有してください。");
 }
 
-async function shareFile(blob, filename, title, fallbackMessage) {
-  const file = new File([blob], filename, { type: blob.type || "application/octet-stream" });
-  const saveFallback = () => {
+async function shareFile(blob, filename, title, type, fallbackMessage) {
+  const file = new File([blob], filename, { type });
+  const saveFallback = (reason) => {
+    console.log("[backup-share] fallback to save", { reason, filename, type: file.type, size: file.size });
     saveBlob(filename, blob);
     showToast(fallbackMessage);
   };
+  const canShareFiles = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  console.log("[backup-share] share attempt", {
+    hasNavigatorShare: !!navigator.share,
+    canShareFiles,
+    filename,
+    type: file.type,
+    size: file.size
+  });
   try {
     if (!navigator.share) {
-      saveFallback();
+      saveFallback("navigator.share is unavailable");
       return;
     }
-    if (navigator.canShare && !navigator.canShare({ files: [file] })) {
-      saveFallback();
-      return;
-    }
-    await navigator.share({ title, text: filename, files: [file] });
+    await navigator.share({
+      title,
+      text: "鮎釣り記録アプリのバックアップファイルです。",
+      files: [file]
+    });
     showToast("共有画面を開きました");
   } catch (error) {
+    console.log("[backup-share] share failed", {
+      name: error.name,
+      message: error.message,
+      filename,
+      type: file.type,
+      size: file.size
+    });
     if (error.name === "AbortError") {
       showToast("共有をキャンセルしました。");
       return;
     }
-    saveFallback();
+    saveFallback(`${error.name}: ${error.message}`);
   }
 }
 
