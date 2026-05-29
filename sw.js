@@ -1,4 +1,4 @@
-const CACHE_NAME = "ayu-fishing-log-v27";
+const CACHE_NAME = "ayu-fishing-log-v28";
 const ASSETS = [
   "./",
   "./index.html",

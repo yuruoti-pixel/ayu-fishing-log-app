@@ -1526,8 +1526,9 @@ async function sharePhotoZip() {
       blob,
       filename,
       "鮎釣り写真付きバックアップ",
-      "application/zip",
-      "この端末では直接共有できないため、ファイルを保存しました。保存後は、スマホのダウンロードまたはFilesアプリからファイルを選んで共有してください。"
+      ["application/zip", "application/octet-stream"],
+      "ZIP",
+      "この形式は端末の直接共有に対応しなかったため、ファイルを保存しました。FilesアプリやダウンロードからLINE、メール、Google Driveなどで共有してください。"
     );
   } catch {
     showToast("写真付きバックアップの共有に失敗しました");
@@ -1535,50 +1536,68 @@ async function sharePhotoZip() {
 }
 
 async function shareBlob(blob, filename, title) {
-  const type = filename.endsWith(".csv") ? "text/csv" : "application/json";
-  await shareFile(blob, filename, title, type, "この端末では直接共有できないため、ファイルを保存しました。保存後は、スマホのダウンロードまたはFilesアプリからファイルを選んで共有してください。");
+  const isCsv = filename.endsWith(".csv");
+  await shareFile(
+    blob,
+    filename,
+    title,
+    isCsv ? ["text/csv"] : ["application/json", "text/plain"],
+    isCsv ? "CSV" : "JSON",
+    "この形式は端末の直接共有に対応しなかったため、ファイルを保存しました。FilesアプリやダウンロードからLINE、メール、Google Driveなどで共有してください。"
+  );
 }
 
-async function shareFile(blob, filename, title, type, fallbackMessage) {
-  const file = new File([blob], filename, { type });
+async function shareFile(blob, filename, title, types, kind, fallbackMessage) {
+  const shareTypes = Array.isArray(types) ? types : [types];
+  let lastFailure = "unknown";
   const saveFallback = (reason) => {
-    console.log("[backup-share] fallback to save", { reason, filename, type: file.type, size: file.size });
+    console.log("[backup-share] fallback to save", { kind, reason, filename, size: blob.size });
     saveBlob(filename, blob);
     showToast(fallbackMessage);
   };
-  const canShareFiles = !!(navigator.canShare && navigator.canShare({ files: [file] }));
-  console.log("[backup-share] share attempt", {
-    hasNavigatorShare: !!navigator.share,
-    canShareFiles,
-    filename,
-    type: file.type,
-    size: file.size
-  });
-  try {
-    if (!navigator.share) {
-      saveFallback("navigator.share is unavailable");
-      return;
-    }
-    await navigator.share({
-      title,
-      text: "鮎釣り記録アプリのバックアップファイルです。",
-      files: [file]
-    });
-    showToast("共有画面を開きました");
-  } catch (error) {
-    console.log("[backup-share] share failed", {
-      name: error.name,
-      message: error.message,
+
+  if (!navigator.share) {
+    saveFallback("navigator.share is unavailable");
+    return;
+  }
+
+  for (const type of shareTypes) {
+    const file = new File([blob], filename, { type });
+    const canShareFiles = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+    console.log("[backup-share] share attempt", {
+      kind,
+      hasNavigatorShare: !!navigator.share,
+      canShareFiles,
       filename,
       type: file.type,
       size: file.size
     });
-    if (error.name === "AbortError") {
-      showToast("共有をキャンセルしました。");
+    try {
+      await navigator.share({
+        title,
+        text: "鮎釣り記録アプリのバックアップファイルです。",
+        files: [file]
+      });
+      showToast("共有画面を開きました");
       return;
+    } catch (error) {
+      console.log("[backup-share] share failed", {
+        kind,
+        name: error.name,
+        message: error.message,
+        filename,
+        type: file.type,
+        size: file.size
+      });
+      if (error.name === "AbortError") {
+        showToast("共有をキャンセルしました。");
+        return;
+      }
+      lastFailure = `${type}: ${error.name}: ${error.message}`;
     }
-    saveFallback(`${error.name}: ${error.message}`);
   }
+
+  saveFallback(lastFailure);
 }
 
 function saveBlob(filename, blob) {
