@@ -5,6 +5,92 @@ const STORE_PHOTOS = "photos";
 const STATE_KEY = "app";
 const LEGACY_STORAGE_KEY = "ayuFishingLog.v1";
 const MAX_RECORD_PHOTOS = 5;
+const NATIVE_BACKUP_DIR = "ayu-fishing-log";
+
+function capacitorPlugin(name) {
+  return window.Capacitor?.Plugins?.[name];
+}
+
+function isCapacitorAndroid() {
+  return !!(window.Capacitor?.isNativePlatform?.() && window.Capacitor?.getPlatform?.() === "android");
+}
+
+async function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function writeNativeBlob(filename, blob, directory) {
+  const Filesystem = capacitorPlugin("Filesystem");
+  if (!Filesystem) throw new Error("Filesystem plugin is unavailable");
+  const path = `${NATIVE_BACKUP_DIR}/${filename}`;
+  console.log("[native-file] Filesystem.writeFile", { kind: filename.split(".").pop()?.toUpperCase(), path, directory, format: "base64", size: blob.size });
+  await Filesystem.writeFile({
+    path,
+    data: await blobToBase64(blob),
+    directory,
+    recursive: true
+  });
+  const { uri } = await Filesystem.getUri({ path, directory });
+  console.log("[native-file] Filesystem.getUri", { path, directory, uri });
+  return { filename, path, directory, uri };
+}
+
+async function writeNativeText(filename, text, directory) {
+  const Filesystem = capacitorPlugin("Filesystem");
+  if (!Filesystem) throw new Error("Filesystem plugin is unavailable");
+  const path = `${NATIVE_BACKUP_DIR}/${filename}`;
+  console.log("[native-file] Filesystem.writeFile", { kind: filename.split(".").pop()?.toUpperCase(), path, directory, format: "utf8", length: text.length });
+  await Filesystem.writeFile({ path, data: text, directory, encoding: "utf8", recursive: true });
+  const { uri } = await Filesystem.getUri({ path, directory });
+  console.log("[native-file] Filesystem.getUri", { path, directory, uri });
+  return { filename, path, directory, uri };
+}
+
+function showNativeDocumentDebug(details) {
+  showToast(details.listed
+    ? `${details.filename} をDocuments/ayu-fishing-logに保存しました。Filesアプリから確認できます。見つからない場合はFilesアプリでファイル名を検索してください。`
+    : `${details.filename} の保存を確認できませんでした。共有ボタンからGoogle Driveやメールへ送って保管してください。`);
+}
+
+async function saveToDocumentsVisible(filename, data, { kind, encoding }) {
+  const Filesystem = capacitorPlugin("Filesystem");
+  if (!Filesystem) throw new Error("Filesystem plugin is unavailable");
+  const path = `${NATIVE_BACKUP_DIR}/${filename}`;
+  const details = { kind, filename, path, directory: "DOCUMENTS", writeOk: false, statOk: false, listed: false, files: [] };
+  console.log("[native-document] save start", details);
+  try {
+    console.log("[native-document] Filesystem.writeFile", { kind, filename, directory: details.directory, path, encoding: encoding || "base64" });
+    const writeResult = await Filesystem.writeFile({ path, data, directory: details.directory, encoding, recursive: true });
+    details.writeOk = true;
+    console.log("[native-document] Filesystem.writeFile result", { kind, filename, directory: details.directory, path, result: writeResult });
+    try {
+      const statResult = await Filesystem.stat({ path, directory: details.directory });
+      details.statOk = statResult.type === "file";
+      console.log("[native-document] Filesystem.stat result", { kind, filename, directory: details.directory, path, result: statResult, exists: details.statOk });
+    } catch (error) {
+      console.log("[native-document] Filesystem.stat error", { kind, filename, directory: details.directory, path, name: error.name, message: error.message });
+    }
+    const readResult = await Filesystem.readdir({ path: NATIVE_BACKUP_DIR, directory: details.directory });
+    details.files = readResult.files.map((file) => typeof file === "string" ? file : file.name);
+    details.listed = details.files.includes(filename);
+    console.log("[native-document] Filesystem.readdir result", { kind, filename, directory: details.directory, path: NATIVE_BACKUP_DIR, files: details.files, listed: details.listed });
+  } catch (error) {
+    console.log("[native-document] error", { kind, filename, directory: details.directory, path, name: error.name, message: error.message });
+  }
+  showNativeDocumentDebug(details);
+  return details;
+}
+
+console.log("[native] environment", {
+  isCapacitorAndroid: isCapacitorAndroid(),
+  platform: window.Capacitor?.getPlatform?.(),
+  plugins: Object.keys(window.Capacitor?.Plugins || {})
+});
 
 const sections = {
   common: { label: "共通情報", prefix: "" },
@@ -641,6 +727,21 @@ async function addPhotosToForm(form, files) {
   }
   setPhotoIdsToInput(form, ids);
   buildForm(form, collectForm(form, form === editForm ? getEditingRecord() || createEmptyRecord() : createEmptyRecord()), form === editForm ? "edit" : "add");
+}
+
+async function capturePhotoToForm(form) {
+  const Camera = capacitorPlugin("Camera");
+  if (!Camera) throw new Error("Camera plugin is unavailable");
+  const photo = await Camera.getPhoto({
+    quality: 90,
+    resultType: "uri",
+    source: "CAMERA",
+    correctOrientation: true
+  });
+  if (!photo.webPath) throw new Error("Camera did not return a photo");
+  const blob = await fetch(photo.webPath).then((response) => response.blob());
+  const extension = photo.format || "jpeg";
+  await addPhotosToForm(form, [new File([blob], `camera-${Date.now()}.${extension}`, { type: blob.type || `image/${extension}` })]);
 }
 
 async function deletePhotoFromForm(form, id) {
@@ -1427,6 +1528,19 @@ async function shareCurrentRecord() {
   const record = getEditingRecord();
   if (!record) return;
   const text = buildShareText(record);
+  if (isCapacitorAndroid()) {
+    try {
+      const Share = capacitorPlugin("Share");
+      if (!Share) throw new Error("Share plugin is unavailable");
+      console.log("[native-share] Share.share", { kind: "RECORD_TEXT", textLength: text.length });
+      await Share.share({ title: "鮎釣り記録", text, dialogTitle: "記録を共有" });
+      return;
+    } catch (error) {
+      console.log("[native-share] error", { kind: "RECORD_TEXT", name: error.name, message: error.message });
+      showToast(`共有画面を開けませんでした: ${error.message}`);
+      return;
+    }
+  }
   if (navigator.share) {
     try {
       await navigator.share({ title: "鮎釣り記録", text });
@@ -1473,8 +1587,12 @@ async function copyCurrentRecord() {
   showToast("共有文をコピーしました");
 }
 
-function exportFile(filename, content, type) {
+async function exportFile(filename, content, type) {
   const blob = new Blob([content], { type });
+  if (isCapacitorAndroid()) {
+    await saveToDocumentsVisible(filename, content, { kind: filename.endsWith(".csv") ? "CSV" : "TEXT", encoding: "utf8" });
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -1483,14 +1601,14 @@ function exportFile(filename, content, type) {
   URL.revokeObjectURL(url);
 }
 
-function exportCsv() {
+async function exportCsv() {
   const fields = exportFields();
   const headers = fields.map((field) => `${sections[field.section].prefix}${field.label}`).concat("合計釣果数");
   const rows = [...state.records]
     .sort((a, b) => (b.common.date || "").localeCompare(a.common.date || ""))
     .map((record) => fields.map((field) => field.type === "photos" ? (record.common?.photoIds || []).length : formatValue(recordSectionValue(record, field))).concat(totalCatch(record)));
   const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
-  exportFile(`ayu-log-${today()}.csv`, `\ufeff${csv}`, "text/csv;charset=utf-8");
+  await exportFile(`ayu-log-${today()}.csv`, `\ufeff${csv}`, "text/csv;charset=utf-8");
 }
 
 function buildCsvBlob() {
@@ -1509,6 +1627,18 @@ function buildJsonBlob() {
 
 function usedPhotoIds() {
   return [...new Set(state.records.flatMap((record) => record.common?.photoIds || []))];
+}
+
+function backupTimestamp() {
+  const date = new Date();
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+    "-",
+    String(date.getHours()).padStart(2, "0"),
+    String(date.getMinutes()).padStart(2, "0")
+  ].join("");
 }
 
 async function buildPhotoZipBlob() {
@@ -1554,17 +1684,23 @@ async function buildPhotoZipBlob() {
 }
 
 function photoZipFilename() {
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 13).replace("T", "-");
+  const stamp = backupTimestamp();
   return `ayu-fishing-log-photo-backup-${stamp}.zip`;
 }
 
 async function savePhotoZip() {
   try {
     const blob = await buildPhotoZipBlob();
-    saveBlob(photoZipFilename(), blob);
+    const filename = photoZipFilename();
+    if (isCapacitorAndroid()) {
+      await saveToDocumentsVisible(filename, await blobToBase64(blob), { kind: "ZIP" });
+      return;
+    }
+    saveBlob(filename, blob);
     showToast("写真付きバックアップを保存しました");
-  } catch {
-    showToast("写真付きバックアップの作成に失敗しました");
+  } catch (error) {
+    console.log("[native-document] error", { kind: "ZIP", name: error.name, message: error.message });
+    showToast("Documentsへ保存できませんでした。共有ボタンからGoogle Driveやメールへ送って保管してください。");
   }
 }
 
@@ -1598,6 +1734,20 @@ async function shareBlob(blob, filename, title) {
 }
 
 async function shareFile(blob, filename, title, types, kind, fallbackMessage) {
+  if (isCapacitorAndroid()) {
+    try {
+      const Share = capacitorPlugin("Share");
+      if (!Share) throw new Error("Share plugin is unavailable");
+      const saved = await writeNativeBlob(filename, blob, "CACHE");
+      console.log("[native-share] Share.share", { kind, uri: saved.uri });
+      await Share.share({ title, files: [saved.uri], dialogTitle: `${kind}を共有` });
+      showToast("共有画面を開きました");
+    } catch (error) {
+      console.log("[native-share] error", { kind, name: error.name, message: error.message });
+      showToast(`共有できませんでした: ${error.message}`);
+    }
+    return;
+  }
   const shareTypes = Array.isArray(types) ? types : [types];
   let lastFailure = "unknown";
   const saveFallback = (reason) => {
@@ -1766,8 +1916,14 @@ function csvCell(value) {
   return `"${String(value ?? "").replaceAll('"', '""')}"`;
 }
 
-function exportJson() {
-  exportFile(`ayu-log-backup-${today()}.json`, JSON.stringify(state, null, 2), "application/json");
+async function exportJson() {
+  const filename = `ayu-fishing-log-backup-${backupTimestamp()}.json`;
+  const content = JSON.stringify(state, null, 2);
+  if (isCapacitorAndroid()) {
+    await saveToDocumentsVisible(filename, content, { kind: "JSON", encoding: "utf8" });
+    return;
+  }
+  await exportFile(filename, content, "application/json");
 }
 
 function importJson(file) {
@@ -1927,7 +2083,7 @@ function showToast(message) {
   toast.textContent = message;
   toast.classList.add("show");
   window.clearTimeout(showToast.timer);
-  showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 2200);
+  showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 12000);
 }
 
 function bindFormBehavior(form, mode) {
@@ -1953,6 +2109,12 @@ function bindFormBehavior(form, mode) {
       const ids = photoIdsFromInput(form);
       if (ids.length >= MAX_RECORD_PHOTOS) {
         showToast("写真は最大5枚までです");
+        return;
+      }
+      if (isCapacitorAndroid()) {
+        capturePhotoToForm(form).catch((error) => {
+          if (!String(error.message).toLowerCase().includes("cancel")) showToast(`カメラを起動できませんでした: ${error.message}`);
+        });
         return;
       }
       const cameraInput = form.querySelector(`[data-photo-camera-input="${event.target.dataset.photoCapture}"]`);
@@ -2271,10 +2433,19 @@ fieldSettings.addEventListener("click", async (event) => {
   showToast("選択肢を保存しました");
 });
 
-if ("serviceWorker" in navigator) {
+if ("serviceWorker" in navigator && !isCapacitorAndroid()) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("sw.js").catch(() => {});
   });
+}
+
+if (isCapacitorAndroid()) {
+  navigator.serviceWorker?.getRegistrations?.()
+    .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+    .then(() => window.caches?.keys?.())
+    .then((keys = []) => Promise.all(keys.map((key) => window.caches.delete(key))))
+    .then(() => console.log("[native] cleared service worker registrations and web caches"))
+    .catch((error) => console.log("[native] cache cleanup error", { name: error.name, message: error.message }));
 }
 
 (async function init() {
