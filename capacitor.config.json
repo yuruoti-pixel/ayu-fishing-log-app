@@ -1,7 +1,7 @@
 {
   "appId": "jp.yuruoti.ayufishinglog",
   "appName": "Ayu Fishing Log",
-  "webDir": ".",
+  "webDir": "www",
   "server": {
     "androidScheme": "https"
   }

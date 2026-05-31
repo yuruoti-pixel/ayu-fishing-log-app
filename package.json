@@ -4,6 +4,7 @@
   "private": true,
   "description": "Android app version of the Ayu Fishing Log PWA using Capacitor.",
   "scripts": {
+    "build:web": "node scripts/copy-web.mjs",
     "cap:sync": "cap sync",
     "cap:open:android": "cap open android"
   },
