@@ -1,0 +1,17 @@
+{
+  "name": "ayu-fishing-log-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Android app version of the Ayu Fishing Log PWA using Capacitor.",
+  "scripts": {
+    "cap:sync": "cap sync",
+    "cap:open:android": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/android": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0"
+  }
+}
