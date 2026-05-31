@@ -774,13 +774,25 @@ async function capturePhotoToForm(form) {
   if (!Camera) throw new Error("Camera plugin is unavailable");
   const photo = await Camera.getPhoto({
     quality: 90,
-    resultType: "uri",
+    resultType: "dataUrl",
     source: "CAMERA",
     correctOrientation: true
   });
-  if (!photo.webPath) throw new Error("Camera did not return a photo");
-  const blob = await fetch(photo.webPath).then((response) => response.blob());
   const extension = photo.format || "jpeg";
+  const type = `image/${extension}`;
+  let blob;
+  if (photo.dataUrl) {
+    blob = await fetch(photo.dataUrl).then((response) => response.blob());
+  } else if (photo.base64String) {
+    blob = base64ToBlob(photo.base64String, type);
+  } else {
+    const uri = photo.webPath || photo.path;
+    if (!uri) throw new Error("Camera did not return photo data");
+    blob = await fetch(uri).then((response) => {
+      if (!response.ok) throw new Error(`Camera photo fetch failed: ${response.status}`);
+      return response.blob();
+    });
+  }
   await addPhotosToForm(form, [new File([blob], `camera-${Date.now()}.${extension}`, { type: blob.type || `image/${extension}` })]);
 }
 
