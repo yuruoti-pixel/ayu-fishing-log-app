@@ -372,6 +372,13 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+.autosave-status {
+  min-height: 20px;
+  margin: 4px 2px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .primary-button,
 .secondary-button,
 .danger-button,
@@ -715,6 +722,31 @@ button:focus-visible {
   margin-bottom: 0;
   color: #76521d;
   line-height: 1.6;
+}
+
+.saved-backup-list {
+  margin-top: 14px;
+}
+
+.saved-backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.saved-backup-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.saved-backup-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
 }
 
 .file-import {

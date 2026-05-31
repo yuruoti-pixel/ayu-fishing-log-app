@@ -3,6 +3,7 @@ const DB_VERSION = 2;
 const STORE_STATE = "state";
 const STORE_PHOTOS = "photos";
 const STATE_KEY = "app";
+const ADD_DRAFT_KEY = "addDraft";
 const LEGACY_STORAGE_KEY = "ayuFishingLog.v1";
 const MAX_RECORD_PHOTOS = 5;
 const NATIVE_BACKUP_DIR = "ayu-fishing-log";
@@ -143,6 +144,11 @@ let calendarCursor = new Date();
 let selectedCalendarDate = today();
 let searchDetailsOpen = false;
 let backupPage = "top";
+let currentViewName = "home";
+let addDraftRecord = null;
+let addDraftPrompted = false;
+let skipNextAddDraftPersist = false;
+const autosaveTimers = { add: null, edit: null };
 
 const views = document.querySelectorAll(".view");
 const navButtons = document.querySelectorAll(".nav-button");
@@ -235,6 +241,33 @@ function writeStateToDb(nextState) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_STATE, "readwrite");
     tx.objectStore(STORE_STATE).put(nextState, STATE_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function readAddDraftFromDb() {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_STATE, "readonly");
+    const request = tx.objectStore(STORE_STATE).get(ADD_DRAFT_KEY);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function writeAddDraftToDb(record) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_STATE, "readwrite");
+    tx.objectStore(STORE_STATE).put(record, ADD_DRAFT_KEY);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function deleteAddDraftFromDb() {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_STATE, "readwrite");
+    tx.objectStore(STORE_STATE).delete(ADD_DRAFT_KEY);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
@@ -551,6 +584,12 @@ function buildForm(form, record, mode) {
       '<button class="secondary-button" id="moreActionsButton" type="button">その他の操作</button>'
     ].join("");
   form.appendChild(actions);
+  const autosaveStatus = document.createElement("p");
+  autosaveStatus.className = "autosave-status";
+  autosaveStatus.dataset.autosaveStatus = mode;
+  autosaveStatus.setAttribute("role", "status");
+  autosaveStatus.setAttribute("aria-live", "polite");
+  form.appendChild(autosaveStatus);
 }
 
 function createFieldControl(field, record, mode) {
@@ -727,6 +766,7 @@ async function addPhotosToForm(form, files) {
   }
   setPhotoIdsToInput(form, ids);
   buildForm(form, collectForm(form, form === editForm ? getEditingRecord() || createEmptyRecord() : createEmptyRecord()), form === editForm ? "edit" : "add");
+  scheduleAutosave(form === editForm ? "edit" : "add");
 }
 
 async function capturePhotoToForm(form) {
@@ -751,6 +791,7 @@ async function deletePhotoFromForm(form, id) {
   const inOtherRecord = state.records.some((record) => record.id !== editingId && (record.common?.photoIds || []).includes(id));
   if (!inOtherRecord) await deletePhotoBlob(id);
   buildForm(form, collectForm(form, form === editForm ? getEditingRecord() || createEmptyRecord() : createEmptyRecord()), form === editForm ? "edit" : "add");
+  scheduleAutosave(form === editForm ? "edit" : "add");
 }
 
 async function openPhotoViewer(id) {
@@ -790,16 +831,82 @@ function collectForm(form, existing = {}) {
   return record;
 }
 
-function showView(name) {
+function setAutosaveStatus(mode, message) {
+  const status = document.querySelector(`[data-autosave-status="${mode}"]`);
+  if (status) status.textContent = message;
+}
+
+async function persistForm(mode) {
+  window.clearTimeout(autosaveTimers[mode]);
+  autosaveTimers[mode] = null;
+  try {
+    setAutosaveStatus(mode, "保存中...");
+    if (mode === "edit") {
+      const index = state.records.findIndex((record) => record.id === editingId);
+      if (index < 0) return;
+      state.records[index] = collectForm(editForm, state.records[index]);
+      await saveState();
+      setAutosaveStatus(mode, "自動保存しました");
+      return;
+    }
+    addDraftRecord = collectForm(addForm, addDraftRecord || createEmptyRecord());
+    await writeAddDraftToDb(addDraftRecord);
+    setAutosaveStatus(mode, "下書きを保存しました");
+  } catch (error) {
+    console.log("[autosave] error", { mode, name: error.name, message: error.message });
+    setAutosaveStatus(mode, mode === "edit" ? "自動保存できませんでした。変更を保存を押してください" : "下書きを保存できませんでした");
+  }
+}
+
+function scheduleAutosave(mode) {
+  window.clearTimeout(autosaveTimers[mode]);
+  autosaveTimers[mode] = window.setTimeout(() => persistForm(mode), 1000);
+}
+
+async function restoreOrDiscardAddDraft() {
+  if (addDraftPrompted) return;
+  addDraftPrompted = true;
+  const saved = await readAddDraftFromDb();
+  if (!saved) return;
+  if (confirm("入力途中の下書きがあります。復元しますか？")) {
+    addDraftRecord = normalizeRecord(saved);
+    buildForm(addForm, addDraftRecord, "add");
+    setAutosaveStatus("add", "下書きを復元しました");
+    return;
+  }
+  await deleteAddDraftFromDb();
+  addDraftRecord = null;
+  buildForm(addForm, createEmptyRecord(), "add");
+}
+
+async function persistBeforeLeaving(nextView) {
+  if (currentViewName === nextView) return;
+  if (currentViewName === "edit" && editingId) await persistForm("edit");
+  if (currentViewName === "add") {
+    if (skipNextAddDraftPersist) skipNextAddDraftPersist = false;
+    else {
+      await persistForm("add");
+      addDraftRecord = null;
+      addDraftPrompted = false;
+    }
+  }
+}
+
+async function showView(name) {
+  await persistBeforeLeaving(name);
   views.forEach((view) => view.classList.toggle("active", view.id === `view-${name}`));
   navButtons.forEach((button) => button.classList.toggle("active", button.dataset.view === name));
   if (name === "home") renderCalendar();
-  if (name === "add") buildForm(addForm, createEmptyRecord(), "add");
+  if (name === "add") {
+    if (!addDraftRecord) buildForm(addForm, createEmptyRecord(), "add");
+    await restoreOrDiscardAddDraft();
+  }
   if (name === "list") renderList();
   if (name === "photos") renderPhotoList();
   if (name === "search") renderSearch();
   if (name === "settings") renderSettings();
   if (name === "backup") renderBackup();
+  currentViewName = name;
 }
 
 function renderList() {
@@ -1151,13 +1258,16 @@ function renderBackup() {
     </div>
     <button id="chooseJsonRestoreButton" class="secondary-button" type="button">JSONから復元</button>
     <button id="choosePhotoZipRestoreButton" class="secondary-button" type="button">写真付きバックアップZIPから復元</button>
+    <p class="notice">このアプリで保存したZIPバックアップは、保存済みZIPバックアップから選べます。外部から受け取ったZIPは、ファイルを選択して復元してください。</p>
+    <div id="savedPhotoZipBackups" class="saved-backup-list"></div>
   `;
+  renderSavedPhotoZipBackups();
 }
 
 function openJsonRestorePicker() {
   const input = document.createElement("input");
   input.type = "file";
-  input.accept = ".json,application/json,text/json,text/plain";
+  input.accept = ".json,application/json,text/json,text/plain,application/octet-stream,*/*";
   input.removeAttribute("capture");
   input.addEventListener("change", () => {
     const [file] = input.files || [];
@@ -1168,7 +1278,21 @@ function openJsonRestorePicker() {
   input.click();
 }
 
-function openPhotoZipRestorePicker() {
+async function openPhotoZipRestorePicker() {
+  if (isCapacitorAndroid()) {
+    const NativeZipPicker = capacitorPlugin("NativeZipPicker");
+    if (!NativeZipPicker) return showToast("外部ZIP選択を開けませんでした。", 5000);
+    try {
+      const picked = await NativeZipPicker.pickZip();
+      const blob = base64ToBlob(picked.data, picked.mimeType || "application/zip");
+      await importPhotoZip(new File([blob], picked.name || "external-backup.zip", { type: picked.mimeType || "application/zip" }));
+    } catch (error) {
+      console.log("[restore] native zip picker error", { name: error.name, message: error.message });
+      if (String(error.message).toLowerCase().includes("cancel")) showToast("ファイル選択をキャンセルしました");
+      else showToast("外部ZIPファイルを読み込めませんでした。", 5000);
+    }
+    return;
+  }
   const input = document.createElement("input");
   input.type = "file";
   input.accept = ".zip,application/zip,application/x-zip-compressed,application/octet-stream";
@@ -1180,6 +1304,63 @@ function openPhotoZipRestorePicker() {
     input.remove();
   }, { once: true });
   input.click();
+}
+
+async function renderSavedPhotoZipBackups() {
+  const container = document.getElementById("savedPhotoZipBackups");
+  if (!container || !isCapacitorAndroid()) return;
+  const Filesystem = capacitorPlugin("Filesystem");
+  if (!Filesystem) return;
+  container.innerHTML = '<p class="notice">保存済みZIPバックアップを確認しています...</p>';
+  try {
+    const result = await Filesystem.readdir({ path: NATIVE_BACKUP_DIR, directory: "DOCUMENTS" });
+    const files = result.files
+      .map((file) => typeof file === "string" ? file : file.name)
+      .filter((name) => /\.zip$/i.test(name))
+      .sort()
+      .reverse();
+    container.innerHTML = `
+      <h3>保存済みZIPバックアップ</h3>
+      ${files.length
+        ? files.map((name) => `<div class="saved-backup-row"><span>${escapeHtml(name)}</span><div class="saved-backup-actions"><button class="small-button" type="button" data-saved-photo-zip="${escapeAttribute(name)}">復元</button><button class="danger-button" type="button" data-delete-saved-photo-zip="${escapeAttribute(name)}">削除</button></div></div>`).join("")
+        : '<p class="notice">Documents/ayu-fishing-log に保存済みZIPバックアップはありません。</p>'}
+    `;
+  } catch (error) {
+    console.log("[restore] readdir error", { name: error.name, message: error.message });
+    container.innerHTML = '<p class="notice">保存済みZIPバックアップを読み込めませんでした。ファイルを選択して復元してください。</p>';
+  }
+}
+
+async function importSavedPhotoZip(filename) {
+  const Filesystem = capacitorPlugin("Filesystem");
+  if (!Filesystem) return showToast("保存済みZIPバックアップを読み込めませんでした。", 5000);
+  try {
+    const result = await Filesystem.readFile({ path: `${NATIVE_BACKUP_DIR}/${filename}`, directory: "DOCUMENTS" });
+    const blob = typeof result.data === "string" ? base64ToBlob(result.data, "application/zip") : result.data;
+    await importPhotoZip(new File([blob], filename, { type: "application/zip" }));
+  } catch (error) {
+    console.log("[restore] readFile error", { filename, name: error.name, message: error.message });
+    showToast("保存済みZIPバックアップを読み込めませんでした。", 5000);
+  }
+}
+
+async function deleteSavedPhotoZip(filename) {
+  if (!confirm(`${filename} を削除しますか？`)) return;
+  const Filesystem = capacitorPlugin("Filesystem");
+  if (!Filesystem) return showToast("保存済みZIPバックアップを削除できませんでした。", 5000);
+  try {
+    await Filesystem.deleteFile({ path: `${NATIVE_BACKUP_DIR}/${filename}`, directory: "DOCUMENTS" });
+    showToast(`${filename} を削除しました`);
+    await renderSavedPhotoZipBackups();
+  } catch (error) {
+    console.log("[restore] delete saved zip error", { filename, name: error.name, message: error.message });
+    showToast("保存済みZIPバックアップを削除できませんでした。", 5000);
+  }
+}
+
+function base64ToBlob(base64, type) {
+  const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+  return new Blob([bytes], { type });
 }
 
 function isJsonFile(file) {
@@ -2079,11 +2260,12 @@ function escapeAttribute(value) {
   return escapeHtml(value).replaceAll("`", "&#096;");
 }
 
-function showToast(message) {
+function showToast(message, duration) {
   toast.textContent = message;
   toast.classList.add("show");
   window.clearTimeout(showToast.timer);
-  showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 12000);
+  const isImportant = /できません|失敗|エラー|注意|確認できません|読み込めません|対応していません/.test(message);
+  showToast.timer = window.setTimeout(() => toast.classList.remove("show"), duration ?? (isImportant ? 5000 : 1800));
 }
 
 function bindFormBehavior(form, mode) {
@@ -2100,7 +2282,10 @@ function bindFormBehavior(form, mode) {
       buildForm(form, collectForm(form, mode === "edit" ? getEditingRecord() || createEmptyRecord() : createEmptyRecord()), mode);
       return;
     }
-    if (event.target.dataset.copyMorning) copyMorningToAfternoon(form, mode);
+    if (event.target.dataset.copyMorning) {
+      copyMorningToAfternoon(form, mode);
+      scheduleAutosave(mode);
+    }
     if (event.target.dataset.photoSelect) {
       form.querySelector(`[data-photo-input="${event.target.dataset.photoSelect}"]`)?.click();
       return;
@@ -2151,12 +2336,15 @@ function bindFormBehavior(form, mode) {
     const record = collectForm(form, mode === "edit" ? getEditingRecord() || createEmptyRecord() : createEmptyRecord());
     const total = form.querySelector(".total-strip");
     if (total) total.textContent = `合計釣果：${totalCatch(record)}匹`;
+    scheduleAutosave(mode);
   });
   form.addEventListener("change", (event) => {
     if (event.target.dataset.photoInput || event.target.dataset.photoCameraInput) {
       addPhotosToForm(form, event.target.files);
       event.target.value = "";
+      return;
     }
+    scheduleAutosave(mode);
   });
   form.addEventListener("pointerdown", (event) => {
     const target = event.target.closest("[data-photo-longpress]");
@@ -2178,6 +2366,12 @@ function bindFormBehavior(form, mode) {
 
 bindFormBehavior(addForm, "add");
 bindFormBehavior(editForm, "edit");
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "hidden") return;
+  if (currentViewName === "edit" && editingId) persistForm("edit");
+  if (currentViewName === "add") persistForm("add");
+});
 
 navButtons.forEach((button) => {
   button.addEventListener("click", () => {
@@ -2208,14 +2402,21 @@ backupContent.addEventListener("click", (event) => {
   if (button.id === "sharePhotoZipButton") sharePhotoZip();
   if (button.id === "chooseJsonRestoreButton") openJsonRestorePicker();
   if (button.id === "choosePhotoZipRestoreButton") openPhotoZipRestorePicker();
+  if (button.dataset.savedPhotoZip) importSavedPhotoZip(button.dataset.savedPhotoZip);
+  if (button.dataset.deleteSavedPhotoZip) deleteSavedPhotoZip(button.dataset.deleteSavedPhotoZip);
 });
 
 addForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const record = collectForm(addForm, createEmptyRecord());
+  window.clearTimeout(autosaveTimers.add);
+  const record = collectForm(addForm, addDraftRecord || createEmptyRecord());
   const optionsChanged = await askToAddNewCandidates(record);
   state.records.push(record);
   await saveState();
+  await deleteAddDraftFromDb();
+  addDraftRecord = null;
+  addDraftPrompted = false;
+  skipNextAddDraftPersist = true;
   activeTab.add = "common";
   buildForm(addForm, createEmptyRecord(), "add");
   showToast(optionsChanged ? "記録と候補を保存しました" : "記録を保存しました");
@@ -2224,12 +2425,14 @@ addForm.addEventListener("submit", async (event) => {
 
 editForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  window.clearTimeout(autosaveTimers.edit);
   const index = state.records.findIndex((record) => record.id === editingId);
   if (index < 0) return;
   const record = collectForm(editForm, state.records[index]);
   const optionsChanged = await askToAddNewCandidates(record);
   state.records[index] = record;
   await saveState();
+  setAutosaveStatus("edit", "保存しました");
   showToast(optionsChanged ? "変更と候補を保存しました" : "変更を保存しました");
   showView("list");
 });
