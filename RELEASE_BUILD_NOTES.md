@@ -23,37 +23,31 @@ Important:
 
 1. Generate the web files.
 2. Sync the web files and Capacitor plugins to the Android project.
-3. Build the signed release APK using the existing release signing setup.
-4. Copy the APK to the desktop if needed.
-5. Install and test the release APK on an Android device.
+3. Build the unsigned release APK.
+4. Align and sign the release APK with the existing release key.
+5. Verify the signed APK.
+6. Copy the APK to the desktop if needed.
+7. Install and test the release APK on an Android device.
 
-Run these commands in PowerShell:
+After a Git push, ask the user whether to rebuild the latest release APK. If the user asks to build it, provide the first group of PowerShell commands together:
 
 ```powershell
 cd C:\Users\wells\Documents\Codex\ayu-fishing-log-app
-```
-
-```powershell
 npm.cmd run build:web
-```
-
-```powershell
 npx.cmd cap sync android
-```
-
-```powershell
 $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
-```
-
-```powershell
-cd C:\Users\wells\Documents\Codex\ayu-fishing-log-app\android
-```
-
-```powershell
+cd android
 .\gradlew.bat assembleRelease
+& "$env:LOCALAPPDATA\Android\Sdk\build-tools\37.0.0\zipalign.exe" -f -p 4 ".\app\build\outputs\apk\release\app-release-unsigned.apk" ".\app\build\outputs\apk\release\ayu-fishing-log-release-aligned.apk"
+& "$env:LOCALAPPDATA\Android\Sdk\build-tools\37.0.0\apksigner.bat" sign --ks "C:\Users\wells\Documents\AndroidKeys\ayu-fishing-log-release.jks" --ks-key-alias "ayu-fishing-log" --out ".\app\build\outputs\apk\release\ayu-fishing-log-release.apk" ".\app\build\outputs\apk\release\ayu-fishing-log-release-aligned.apk"
 ```
 
+After the signing command, tell the user in normal chat text to enter the signing-key password in PowerShell. Never write the password itself in a file, code block, or chat message.
+
+After the password has been entered, provide the remaining commands together:
+
 ```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\build-tools\37.0.0\apksigner.bat" verify --verbose ".\app\build\outputs\apk\release\ayu-fishing-log-release.apk"
 Copy-Item ".\app\build\outputs\apk\release\ayu-fishing-log-release.apk" "C:\Users\wells\Desktop\ayu-fishing-log-release.apk" -Force
 ```
 
