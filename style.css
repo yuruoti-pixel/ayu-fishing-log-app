@@ -194,6 +194,11 @@ h3 {
   text-align: center;
 }
 
+.total-strip {
+  background: #dcefeb;
+  color: #245e57;
+}
+
 .copy-morning-button {
   width: 100%;
 }
@@ -398,6 +403,10 @@ button:focus-visible {
   color: #fff;
 }
 
+.form-actions .primary-button {
+  box-shadow: 0 5px 14px rgba(15, 125, 118, 0.34);
+}
+
 .form-actions:not(.edit-actions) .secondary-button,
 .form-actions:not(.edit-actions) .danger-button {
   flex: 1 1 calc(50% - 6px);
@@ -427,6 +436,23 @@ button:focus-visible {
 .settings-stack {
   display: grid;
   gap: 12px;
+}
+
+.app-info {
+  display: grid;
+  gap: 3px;
+  margin-top: 28px;
+  padding: 12px 4px 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  opacity: 0.72;
+  text-align: center;
+}
+
+.app-info strong {
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .record-card {
