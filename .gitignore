@@ -6,5 +6,8 @@ android/build/
 dist/
 .DS_Store
 *.log
+*.jks
+*.keystore
+key.properties
 
 android/.idea/
