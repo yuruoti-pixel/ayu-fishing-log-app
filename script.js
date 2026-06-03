@@ -106,6 +106,9 @@ const typeLabels = {
   textarea: "長文メモ",
   select: "単一選択",
   multiselect: "複数選択",
+  multiselectOther: "複数選択＋その他",
+  selectOther: "単一選択＋その他",
+  timewheel: "時間選択",
   checkbox: "チェック",
   combo: "候補＋直接入力",
   photos: "写真"
@@ -114,8 +117,39 @@ const typeLabels = {
 const settingPages = {
   fields: "入力項目の設定",
   options: "選択肢の設定",
+  list: "一覧表示項目の設定",
   app: "バックアップ・初期化"
 };
+
+const DEFAULT_LIST_DISPLAY_FIELDS = ["weather", "airTemp", "morning.catchCount", "afternoon.catchCount"];
+
+const LIST_DISPLAY_FIELDS = [
+  { key: "weather", label: "天気", value: (record) => record.common?.weather || "" },
+  { key: "airTemp", label: "気温", value: (record) => withUnit(record.common?.airTemp, "℃") },
+  { key: "morning.waterTemp", label: "午前水温", value: (record) => withUnit(record.morning?.waterTemp, "℃") },
+  { key: "afternoon.waterTemp", label: "午後水温", value: (record) => withUnit(record.afternoon?.waterTemp, "℃") },
+  { key: "morning.waterClarity", label: "午前水濁り", value: (record) => record.morning?.waterClarity || "" },
+  { key: "afternoon.waterClarity", label: "午後水濁り", value: (record) => record.afternoon?.waterClarity || "" },
+  { key: "morning.riverCondition", label: "午前川の状態", value: (record) => record.morning?.riverCondition || "" },
+  { key: "afternoon.riverCondition", label: "午後川の状態", value: (record) => record.afternoon?.riverCondition || "" },
+  { key: "morning.mossCondition", label: "午前垢", value: (record) => formatValue(record.morning?.mossCondition) },
+  { key: "afternoon.mossCondition", label: "午後垢", value: (record) => formatValue(record.afternoon?.mossCondition) },
+  { key: "morning.stoneCondition", label: "午前石の状態", value: (record) => formatValue(record.morning?.stoneCondition) },
+  { key: "afternoon.stoneCondition", label: "午後石の状態", value: (record) => formatValue(record.afternoon?.stoneCondition) },
+  { key: "morning.catchCount", label: "午前釣果", value: (record) => `${sessionCatch(record, "morning")}匹` },
+  { key: "afternoon.catchCount", label: "午後釣果", value: (record) => `${sessionCatch(record, "afternoon")}匹` },
+  { key: "totalCatch", label: "合計釣果", value: (record) => `${totalCatch(record)}匹` },
+  { key: "morning.maxSize", label: "午前最大サイズ", value: (record) => withUnit(record.morning?.maxSize, "cm") },
+  { key: "afternoon.maxSize", label: "午後最大サイズ", value: (record) => withUnit(record.afternoon?.maxSize, "cm") },
+  { key: "river", label: "河川", value: (record) => record.common?.river || "" },
+  { key: "point", label: "ポイント名", value: (record) => recordPoints(record) },
+  { key: "morning.rod", label: "午前使用竿", value: (record) => record.morning?.rod || "" },
+  { key: "afternoon.rod", label: "午後使用竿", value: (record) => record.afternoon?.rod || "" },
+  { key: "morning.underwaterLine", label: "午前水中糸", value: (record) => record.morning?.underwaterLine || "" },
+  { key: "afternoon.underwaterLine", label: "午後水中糸", value: (record) => record.afternoon?.underwaterLine || "" },
+  { key: "morning.hook", label: "午前針", value: (record) => record.morning?.hook || "" },
+  { key: "afternoon.hook", label: "午後針", value: (record) => record.afternoon?.hook || "" }
+];
 
 const comboFieldIds = new Set([
   "fishingCoop",
@@ -129,7 +163,9 @@ const comboFieldIds = new Set([
   "morning_hanakan",
   "afternoon_hanakan",
   "morning_hook",
-  "afternoon_hook"
+  "afternoon_hook",
+  "morning_riverCondition",
+  "afternoon_riverCondition"
 ]);
 
 let templateFields = [];
@@ -181,10 +217,11 @@ async function loadInitialTemplates() {
 
 function makeDefaultState() {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     fields: structuredClone(templateFields),
     options: structuredClone(templateOptions),
-    records: []
+    records: [],
+    settings: { listDisplayFields: DEFAULT_LIST_DISPLAY_FIELDS }
   };
 }
 
@@ -277,7 +314,9 @@ async function loadState() {
   const saved = await readStateFromDb();
   if (saved) {
     const merged = normalizeState(saved);
-    const changed = mergeNewTemplateItems(merged) || applySchemaRules(merged);
+    const templateChanged = mergeNewTemplateItems(merged);
+    const schemaChanged = applySchemaRules(merged);
+    const changed = templateChanged || schemaChanged;
     if (changed) await writeStateToDb(merged);
     return merged;
   }
@@ -307,11 +346,18 @@ function loadLegacyState() {
 
 function normalizeState(raw) {
   const fallback = makeDefaultState();
+  const listDisplayFields = Array.isArray(raw.settings?.listDisplayFields)
+    ? raw.settings.listDisplayFields.filter((key) => LIST_DISPLAY_FIELDS.some((field) => field.key === key))
+    : DEFAULT_LIST_DISPLAY_FIELDS;
   return {
     schemaVersion: Number(raw.schemaVersion || 1),
     fields: Array.isArray(raw.fields) ? raw.fields : fallback.fields,
     options: { ...fallback.options, ...(raw.options || {}) },
-    records: Array.isArray(raw.records) ? raw.records.map(normalizeRecord) : []
+    records: Array.isArray(raw.records) ? raw.records.map(normalizeRecord) : [],
+    settings: {
+      ...(raw.settings || {}),
+      listDisplayFields: listDisplayFields.length ? listDisplayFields : DEFAULT_LIST_DISPLAY_FIELDS
+    }
   };
 }
 
@@ -358,6 +404,7 @@ function applySchemaRules(targetState) {
     waterClarity: 50,
     riverCondition: 60,
     mossCondition: 70,
+    stoneCondition: 75,
     rod: 80,
     underwaterLine: 90,
     hanakan: 100,
@@ -410,6 +457,27 @@ function applySchemaRules(targetState) {
       field.optionKey = defaultOptionKeys[field.id] || field.id;
       changed = true;
     }
+    if (field.sourceId === "startTime" && field.type !== "timewheel") {
+      field.type = "timewheel";
+      changed = true;
+    }
+    if (field.sourceId === "riverCondition" && field.type !== "combo") {
+      field.type = "combo";
+      field.optionKey ||= "riverCondition";
+      changed = true;
+    }
+    if (field.sourceId === "mossCondition") {
+      if (field.label !== "垢" || field.type !== "multiselectOther" || field.optionKey !== "mossCondition") changed = true;
+      field.label = "垢";
+      field.type = "multiselectOther";
+      field.optionKey = "mossCondition";
+    }
+    if (field.sourceId === "stoneCondition") {
+      if (field.label !== "石の状態" || field.type !== "selectOther" || field.optionKey !== "stoneCondition") changed = true;
+      field.label = "石の状態";
+      field.type = "selectOther";
+      field.optionKey = "stoneCondition";
+    }
     if ((field.section === "morning" || field.section === "afternoon") && Object.hasOwn(fixedSessionOrders, field.sourceId)) {
       const nextOrder = fixedSessionOrders[field.sourceId];
       if (field.order !== nextOrder) {
@@ -418,14 +486,33 @@ function applySchemaRules(targetState) {
       }
     }
   });
-  ["fishingCoop", "point", "underwaterLine", "hanakan", "hook", "morningStartTime", "afternoonStartTime"].forEach((key) => {
+  const fixedOptions = {
+    waterClarity: ["澄み", "笹濁り", "濁り", "泥濁り"],
+    mossCondition: ["良好", "新垢", "垢腐れ", "垢腐れ前", "その他"],
+    stoneCondition: ["白", "黒", "ビール色", "ビール瓶色", "その他"]
+  };
+  ["fishingCoop", "point", "underwaterLine", "hanakan", "hook", "morningStartTime", "afternoonStartTime", "riverCondition"].forEach((key) => {
     if (!Array.isArray(targetState.options[key])) {
       targetState.options[key] = structuredClone(templateOptions[key] || []);
       changed = true;
     }
   });
-  if (targetState.schemaVersion !== 5) {
-    targetState.schemaVersion = 5;
+  Object.entries(fixedOptions).forEach(([key, values]) => {
+    if (!Array.isArray(targetState.options[key]) || JSON.stringify(targetState.options[key]) !== JSON.stringify(values)) {
+      targetState.options[key] = structuredClone(values);
+      changed = true;
+    }
+  });
+  if (!targetState.settings) {
+    targetState.settings = { listDisplayFields: DEFAULT_LIST_DISPLAY_FIELDS };
+    changed = true;
+  }
+  if (!Array.isArray(targetState.settings.listDisplayFields) || !targetState.settings.listDisplayFields.length) {
+    targetState.settings.listDisplayFields = DEFAULT_LIST_DISPLAY_FIELDS;
+    changed = true;
+  }
+  if (targetState.schemaVersion !== 6) {
+    targetState.schemaVersion = 6;
     changed = true;
   }
   return changed;
@@ -515,6 +602,104 @@ function setRecordSectionValue(record, field, value) {
   record[field.section][field.sourceId || field.id] = value;
 }
 
+function withUnit(value, unit) {
+  const text = String(value ?? "").trim();
+  return text ? `${text}${unit}` : "";
+}
+
+function fieldValues(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  return String(value || "").split(/[、,]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function optionValuesWithCurrent(field, value) {
+  const values = [...new Set(state.options[field.optionKey] || [])];
+  fieldValues(value).forEach((item) => {
+    if (item && !values.includes(item) && !item.startsWith("その他:")) values.push(item);
+  });
+  return values;
+}
+
+function parseTimeValue(value) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
+  return {
+    hour: match ? String(Number(match[1])) : "",
+    minute: match ? match[2] : "00"
+  };
+}
+
+function createTimeWheelControl(field, value, mode, inputName) {
+  const box = document.createElement("div");
+  box.className = "time-wheel";
+  const hidden = document.createElement("input");
+  hidden.type = "hidden";
+  hidden.id = `${mode}-${field.id}`;
+  hidden.name = inputName;
+  hidden.dataset.fieldId = field.id;
+  hidden.value = value || "";
+  const parsed = parseTimeValue(value);
+  const hour = document.createElement("select");
+  hour.dataset.timeHour = field.id;
+  hour.appendChild(new Option("時", ""));
+  for (let i = 0; i <= 23; i += 1) hour.appendChild(new Option(String(i), String(i)));
+  hour.value = parsed.hour;
+  const minute = document.createElement("select");
+  minute.dataset.timeMinute = field.id;
+  for (let i = 0; i < 60; i += 5) {
+    const text = String(i).padStart(2, "0");
+    minute.appendChild(new Option(text, text));
+  }
+  minute.value = parsed.minute;
+  box.append(hidden, hour, document.createTextNode(":"), minute);
+  return box;
+}
+
+function createSelectOtherControl(field, value) {
+  const box = document.createElement("div");
+  box.className = "select-other";
+  const select = document.createElement("select");
+  const options = optionValuesWithCurrent(field, value);
+  select.appendChild(new Option("選択してください", ""));
+  options.forEach((option) => select.appendChild(new Option(option, option)));
+  const text = document.createElement("input");
+  text.type = "text";
+  text.placeholder = "その他の内容";
+  text.dataset.otherText = field.id;
+  const stringValue = String(value || "");
+  const otherText = stringValue.startsWith("その他:") ? stringValue.slice(4).trim() : "";
+  select.value = otherText ? "その他" : stringValue;
+  text.value = otherText;
+  text.hidden = select.value !== "その他";
+  box.append(select, text);
+  return { box, select, text };
+}
+
+function createMultiselectOtherControl(field, value) {
+  const box = document.createElement("div");
+  box.className = "multi-check-list";
+  const values = fieldValues(value);
+  const otherValue = values.find((item) => item.startsWith("その他:"))?.slice(4).trim() || "";
+  optionValuesWithCurrent(field, value).forEach((option) => {
+    if (option.startsWith("その他:")) return;
+    const label = document.createElement("label");
+    label.className = "multi-check";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = option;
+    checkbox.checked = values.includes(option) || (option === "その他" && !!otherValue);
+    label.append(checkbox, document.createTextNode(option));
+    box.appendChild(label);
+  });
+  const otherInput = document.createElement("input");
+  otherInput.type = "text";
+  otherInput.placeholder = "その他の内容";
+  otherInput.dataset.otherText = field.id;
+  otherInput.value = otherValue;
+  otherInput.hidden = !values.includes("その他") && !otherValue;
+  box.appendChild(otherInput);
+  return { box, otherInput };
+}
+
 function createEmptyRecord() {
   const record = {
     id: crypto.randomUUID(),
@@ -598,7 +783,7 @@ function createFieldControl(field, record, mode) {
   const inputName = `${field.section}.${field.sourceId || field.id}`;
   const label = document.createElement("label");
   label.htmlFor = `${mode}-${field.id}`;
-  label.textContent = `${field.label}${field.unit ? `（${field.unit}）` : ""}${field.required ? " *" : ""}`;
+  label.textContent = `${field.label}${field.required ? " *" : ""}`;
   wrapper.appendChild(label);
 
   let input;
@@ -613,11 +798,18 @@ function createFieldControl(field, record, mode) {
     wrapper.appendChild(input);
     wrapper.appendChild(createPhotoPicker(field, value, mode));
     return wrapper;
+  } else if (field.type === "timewheel") {
+    wrapper.appendChild(createTimeWheelControl(field, value, mode, inputName));
+    return wrapper;
   } else if (field.type === "select") {
     input = document.createElement("select");
     input.appendChild(new Option("選択してください", ""));
-    (state.options[field.optionKey] || []).forEach((option) => input.appendChild(new Option(option, option)));
+    optionValuesWithCurrent(field, value).forEach((option) => input.appendChild(new Option(option, option)));
     input.value = value;
+  } else if (field.type === "selectOther") {
+    const control = createSelectOtherControl(field, value);
+    input = control.select;
+    wrapper.appendChild(control.box);
   } else if (field.type === "combo") {
     input = document.createElement("input");
     input.type = "text";
@@ -627,13 +819,20 @@ function createFieldControl(field, record, mode) {
   } else if (field.type === "multiselect") {
     input = document.createElement("select");
     input.multiple = true;
-    input.size = Math.min(5, Math.max(3, (state.options[field.optionKey] || []).length));
-    const values = Array.isArray(value) ? value : String(value || "").split("、").filter(Boolean);
-    (state.options[field.optionKey] || []).forEach((option) => {
+    input.size = Math.min(5, Math.max(3, optionValuesWithCurrent(field, value).length));
+    const values = fieldValues(value);
+    optionValuesWithCurrent(field, value).forEach((option) => {
       const opt = new Option(option, option);
       opt.selected = values.includes(option);
       input.appendChild(opt);
     });
+  } else if (field.type === "multiselectOther") {
+    const control = createMultiselectOtherControl(field, value);
+    input = document.createElement("input");
+    input.type = "hidden";
+    input.value = JSON.stringify(fieldValues(value));
+    wrapper.appendChild(input);
+    wrapper.appendChild(control.box);
   } else if (field.type === "textarea") {
     input = document.createElement("textarea");
     input.value = value;
@@ -652,7 +851,16 @@ function createFieldControl(field, record, mode) {
   input.name = inputName;
   input.required = !!field.required;
   input.dataset.fieldId = field.id;
-  wrapper.appendChild(input);
+  if (!input.parentElement) wrapper.appendChild(input);
+  if (field.unit && field.type === "number") {
+    const unit = document.createElement("span");
+    unit.className = "input-unit";
+    unit.textContent = field.unit;
+    const group = document.createElement("div");
+    group.className = "unit-input";
+    group.append(input, unit);
+    wrapper.appendChild(group);
+  }
   if (field.type === "combo") wrapper.appendChild(createCandidateList(field, value));
   return wrapper;
 }
@@ -835,6 +1043,17 @@ function collectForm(form, existing = {}) {
     let value;
     if (field.type === "photos") {
       try { value = JSON.parse(input.value || "[]"); } catch { value = []; }
+    } else if (field.type === "selectOther") {
+      const other = input.parentElement.querySelector(`[data-other-text="${field.id}"]`)?.value.trim() || "";
+      value = input.value === "その他" && other ? `その他: ${other}` : input.value.trim();
+    } else if (field.type === "multiselectOther") {
+      const box = input.parentElement.querySelector(".multi-check-list");
+      value = Array.from(box?.querySelectorAll('input[type="checkbox"]:checked') || []).map((checkbox) => checkbox.value);
+      const other = box?.querySelector(`[data-other-text="${field.id}"]`)?.value.trim() || "";
+      if (value.includes("その他") && other) {
+        value = value.filter((item) => item !== "その他");
+        value.push(`その他: ${other}`);
+      }
     } else if (field.type === "multiselect") value = Array.from(input.selectedOptions).map((option) => option.value);
     else if (field.type === "checkbox") value = input.checked;
     else value = input.value.trim();
@@ -943,11 +1162,7 @@ function renderList() {
         </div>
         <div class="record-catch">合計 ${totalCatch(record)}匹</div>
       </div>
-      <div class="record-meta">
-        <span>${escapeHtml(record.common.weather || "天気未設定")}</span>
-        <span>午前 ${sessionCatch(record, "morning")}匹</span>
-        <span>午後 ${sessionCatch(record, "afternoon")}匹</span>
-      </div>
+      <div class="record-meta">${recordMetaItems(record)}</div>
       <div class="card-actions">
         <button class="secondary-button" type="button" data-edit="${record.id}">編集</button>
         <button class="danger-button" type="button" data-delete="${record.id}">削除</button>
@@ -1092,7 +1307,7 @@ function renderSearch() {
         <label>天気<select name="weather"><option value="">すべて</option>${optionChoices("weather")}</select></label>
         <label>水濁り<select name="waterClarity"><option value="">すべて</option>${optionChoices("waterClarity")}</select></label>
         <label>川の状態<select name="riverCondition"><option value="">すべて</option>${optionChoices("riverCondition")}</select></label>
-        <label>苔<select name="mossCondition"><option value="">すべて</option>${optionChoices("mossCondition")}</select></label>
+        <label>垢<select name="mossCondition"><option value="">すべて</option>${optionChoices("mossCondition")}</select></label>
         <div class="range-field">
           <span>気温</span>
           <input name="airMin" type="number" inputmode="decimal" placeholder="下限">
@@ -1470,6 +1685,7 @@ function renderSettings() {
         <div class="setting-menu-grid">
           <button class="secondary-button" type="button" data-setting-page="fields">入力項目の設定</button>
           <button class="secondary-button" type="button" data-setting-page="options">選択肢の設定</button>
+          <button class="secondary-button" type="button" data-setting-page="list">一覧表示項目の設定</button>
           <button class="secondary-button" type="button" data-setting-page="app">バックアップ・初期化・アプリ設定</button>
           <button class="primary-button" type="button" data-view-shortcut="list">記録一覧へ戻る</button>
         </div>
@@ -1479,6 +1695,7 @@ function renderSettings() {
   }
   if (settingPage === "fields") renderFieldSettings();
   if (settingPage === "options") renderOptionSettings();
+  if (settingPage === "list") renderListDisplaySettings();
   if (settingPage === "app") renderAppSettings();
 }
 
@@ -1558,6 +1775,26 @@ function renderOptionSettings() {
   `;
 }
 
+function renderListDisplaySettings() {
+  const selected = new Set(state.settings?.listDisplayFields || DEFAULT_LIST_DISPLAY_FIELDS);
+  fieldSettings.innerHTML = `
+    ${settingsHeader(settingPages.list)}
+    <div class="setting-card">
+      <h3>一覧に表示する項目</h3>
+      <p class="notice">記録一覧カードに表示する項目を選べます。多い場合は折り返して表示されます。</p>
+      <div class="list-display-options">
+        ${LIST_DISPLAY_FIELDS.map((field) => `
+          <label class="mini-check list-display-check">
+            <input type="checkbox" data-list-display-field="${field.key}" ${selected.has(field.key) ? "checked" : ""}>
+            ${escapeHtml(field.label)}
+          </label>
+        `).join("")}
+      </div>
+      <button class="secondary-button" type="button" id="resetListDisplayButton">初期表示に戻す</button>
+    </div>
+  `;
+}
+
 function optionCategory(key) {
   const options = state.options[key] || [];
   return `
@@ -1611,7 +1848,7 @@ function renderAppSettings() {
 function optionSettingKeys() {
   const keys = new Set(Object.keys(templateOptions));
   state.fields.forEach((field) => {
-    if ((field.type === "select" || field.type === "multiselect" || field.type === "combo") && field.optionKey) keys.add(field.optionKey);
+    if (["select", "multiselect", "combo", "selectOther", "multiselectOther"].includes(field.type) && field.optionKey) keys.add(field.optionKey);
   });
   return Array.from(keys);
 }
@@ -1653,6 +1890,23 @@ function totalCatch(record) {
 
 function recordPoints(record) {
   return [...new Set([record?.morning?.point, record?.afternoon?.point, record?.common?.point].filter(Boolean))].join(" / ");
+}
+
+function selectedListDisplayFields() {
+  const selected = state.settings?.listDisplayFields || DEFAULT_LIST_DISPLAY_FIELDS;
+  return selected
+    .map((key) => LIST_DISPLAY_FIELDS.find((field) => field.key === key))
+    .filter(Boolean);
+}
+
+function recordMetaItems(record) {
+  return selectedListDisplayFields()
+    .map((field) => {
+      const value = field.value(record);
+      return value || value === 0 ? `<span>${escapeHtml(field.label)}：${escapeHtml(value)}</span>` : "";
+    })
+    .filter(Boolean)
+    .join("");
 }
 
 function fishingDays(records) {
@@ -2140,7 +2394,7 @@ function importJson(file) {
 }
 
 function exportSettings() {
-  exportFile(`ayu-log-settings-${today()}.json`, JSON.stringify({ fields: state.fields, options: state.options }, null, 2), "application/json");
+  exportFile(`ayu-log-settings-${today()}.json`, JSON.stringify({ fields: state.fields, options: state.options, settings: state.settings }, null, 2), "application/json");
 }
 
 function importSettings(file) {
@@ -2151,6 +2405,7 @@ function importSettings(file) {
       if (!Array.isArray(imported.fields) || !imported.options) throw new Error("invalid");
       state.fields = imported.fields;
       state.options = imported.options;
+      if (imported.settings) state.settings = imported.settings;
       mergeNewTemplateItems(state);
       applySchemaRules(state);
       await saveState();
@@ -2356,6 +2611,23 @@ function bindFormBehavior(form, mode) {
       event.target.value = "";
       return;
     }
+    if (event.target.dataset.timeHour || event.target.dataset.timeMinute) {
+      const box = event.target.closest(".time-wheel");
+      const hidden = box?.querySelector('input[type="hidden"]');
+      const hour = box?.querySelector("[data-time-hour]")?.value;
+      const minute = box?.querySelector("[data-time-minute]")?.value || "00";
+      if (hidden) hidden.value = hour ? `${hour}:${minute}` : "";
+    }
+    if (event.target.tagName === "SELECT" && event.target.parentElement?.classList.contains("select-other")) {
+      const other = event.target.parentElement.querySelector("[data-other-text]");
+      if (other) other.hidden = event.target.value !== "その他";
+    }
+    if (event.target.closest(".multi-check-list")) {
+      const box = event.target.closest(".multi-check-list");
+      const other = box.querySelector("[data-other-text]");
+      const otherChecked = Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).some((checkbox) => checkbox.value === "その他");
+      if (other) other.hidden = !otherChecked;
+    }
     scheduleAutosave(mode);
   });
   form.addEventListener("pointerdown", (event) => {
@@ -2558,6 +2830,15 @@ fieldSettings.addEventListener("click", async (event) => {
   if (event.target.id === "importTemplateButton") return importNewTemplateItems();
   if (event.target.id === "resetSettingsButton") return resetSettingsToTemplates();
   if (event.target.id === "devResetButton") return devReset();
+  if (event.target.id === "resetListDisplayButton") {
+    state.settings ||= {};
+    state.settings.listDisplayFields = DEFAULT_LIST_DISPLAY_FIELDS;
+    await saveState();
+    renderListDisplaySettings();
+    renderList();
+    showToast("一覧表示項目を初期表示に戻しました");
+    return;
+  }
   if (event.target.dataset.fieldToggle) {
     expandedFieldId = expandedFieldId === event.target.dataset.fieldToggle ? "" : event.target.dataset.fieldToggle;
     renderSettings();
@@ -2569,7 +2850,7 @@ fieldSettings.addEventListener("click", async (event) => {
     const type = document.getElementById("newFieldType").value;
     if (!label) return;
     const id = `${section}_${Date.now()}`;
-    const optionKey = ["select", "multiselect", "combo"].includes(type) ? id : "";
+    const optionKey = ["select", "multiselect", "combo", "selectOther", "multiselectOther"].includes(type) ? id : "";
     state.fields.push({ id, label, type, optionKey, section, visible: true, order: Date.now(), required: false });
     if (optionKey) state.options[optionKey] = [];
     await saveState();
@@ -2588,7 +2869,7 @@ fieldSettings.addEventListener("click", async (event) => {
     field.label = fieldSettings.querySelector(`[data-field-label="${id}"]`).value.trim() || field.label;
     field.section = fieldSettings.querySelector(`[data-field-section="${id}"]`).value;
     field.type = fieldSettings.querySelector(`[data-field-type="${id}"]`).value;
-    if (["select", "multiselect", "combo"].includes(field.type) && !field.optionKey) {
+    if (["select", "multiselect", "combo", "selectOther", "multiselectOther"].includes(field.type) && !field.optionKey) {
       field.optionKey = field.id;
       state.options[field.optionKey] ||= [];
     }
@@ -2604,6 +2885,16 @@ fieldSettings.addEventListener("click", async (event) => {
 });
 
 fieldSettings.addEventListener("change", (event) => {
+  if (event.target.dataset.listDisplayField) {
+    const selected = Array.from(fieldSettings.querySelectorAll("[data-list-display-field]:checked")).map((input) => input.dataset.listDisplayField);
+    state.settings ||= {};
+    state.settings.listDisplayFields = selected.length ? selected : DEFAULT_LIST_DISPLAY_FIELDS;
+    saveState().then(() => {
+      renderList();
+      showToast("一覧表示項目を保存しました");
+    });
+    return;
+  }
   if (event.target.id === "importSettingsInput") {
     const [file] = event.target.files;
     if (file) importSettings(file);
