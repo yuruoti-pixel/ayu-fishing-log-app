@@ -134,8 +134,8 @@ const LIST_DISPLAY_FIELDS = [
   { key: "afternoon.riverCondition", label: "午後川の状態", value: (record) => record.afternoon?.riverCondition || "" },
   { key: "morning.mossCondition", label: "午前垢", value: (record) => formatValue(record.morning?.mossCondition) },
   { key: "afternoon.mossCondition", label: "午後垢", value: (record) => formatValue(record.afternoon?.mossCondition) },
-  { key: "morning.stoneCondition", label: "午前石の状態", value: (record) => formatValue(record.morning?.stoneCondition) },
-  { key: "afternoon.stoneCondition", label: "午後石の状態", value: (record) => formatValue(record.afternoon?.stoneCondition) },
+  { key: "morning.stoneCondition", label: "午前釣れた石の色", value: (record) => formatValue(record.morning?.stoneCondition) },
+  { key: "afternoon.stoneCondition", label: "午後釣れた石の色", value: (record) => formatValue(record.afternoon?.stoneCondition) },
   { key: "morning.catchCount", label: "午前釣果", value: (record) => `${sessionCatch(record, "morning")}匹` },
   { key: "afternoon.catchCount", label: "午後釣果", value: (record) => `${sessionCatch(record, "afternoon")}匹` },
   { key: "totalCatch", label: "合計釣果", value: (record) => `${totalCatch(record)}匹` },
@@ -473,8 +473,8 @@ function applySchemaRules(targetState) {
       field.optionKey = "mossCondition";
     }
     if (field.sourceId === "stoneCondition") {
-      if (field.label !== "石の状態" || field.type !== "selectOther" || field.optionKey !== "stoneCondition") changed = true;
-      field.label = "石の状態";
+      if (field.label !== "釣れた石の色" || field.type !== "selectOther" || field.optionKey !== "stoneCondition") changed = true;
+      field.label = "釣れた石の色";
       field.type = "selectOther";
       field.optionKey = "stoneCondition";
     }
